@@ -225,39 +225,47 @@ app.get("/api/config", (_, res) => {
 
 app.get("/api/rate", async (_, res) => {
   try {
-    // Conexión segura compatible con Render
-    const binance = await fetch(
+    console.log("📡 Solicitando precios de Binance y ER-API...");
+
+    // Se fuerza conexión segura
+    const binanceResp = await fetch(
       "https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT",
       { agent }
-    ).then((r) => r.json());
-
-    const fx = await fetch("https://open.er-api.com/v6/latest/USD", { agent }).then(
-      (r) => r.json()
     );
+    const fxResp = await fetch("https://open.er-api.com/v6/latest/USD", { agent });
+
+    if (!binanceResp.ok) throw new Error("Error al obtener datos de Binance");
+    if (!fxResp.ok) throw new Error("Error al obtener datos de ExchangeRate");
+
+    const binance = await binanceResp.json();
+    const fx = await fxResp.json();
 
     const wldUsd = parseFloat(binance?.price);
     const usdCop = Number(fx?.rates?.COP);
 
     if (!Number.isFinite(wldUsd) || !Number.isFinite(usdCop)) {
-      return res.status(502).json({ ok: false, error: "Fuentes de tasa no disponibles" });
+      console.error("❌ Datos inválidos:", { wldUsd, usdCop });
+      return res.status(502).json({ ok: false, error: "Datos de tasa inválidos" });
     }
 
     const wldCopBruto = wldUsd * usdCop;
     const wldCopUsuario = wldCopBruto * (1 - SPREAD);
 
-    return res.json({
+    res.json({
       ok: true,
       wld_usd: wldUsd,
       usd_cop: usdCop,
+      wld_cop_bruto: wldCopBruto,
       wld_cop_usuario: Number(wldCopUsuario.toFixed(2)),
       spread_percent: SPREAD * 100,
       fecha: new Date().toISOString(),
     });
   } catch (e) {
-    console.error("❌ Error en /api/rate:", e);
-    return res.status(500).json({ ok: false, error: "Error al obtener la tasa" });
+    console.error("💥 Error en /api/rate:", e.message);
+    res.status(500).json({ ok: false, error: "Error al obtener tasa de cambio" });
   }
 });
+
 
 // ========= CREAR ORDEN =========
 app.post("/api/orders", async (req, res) => {
