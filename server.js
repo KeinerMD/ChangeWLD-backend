@@ -33,7 +33,27 @@ const WLD_TOKEN_ADDRESS = (process.env.WLD_TOKEN_ADDRESS || "").trim();
 // ========= APP =========
 const app = express();
 app.use(helmet());
-app.use(cors());
+// ✅ CORS seguro: permite solo tu dominio de frontend
+const allowedOrigins = [
+  "http://localhost:5173",             // desarrollo local (Vite)
+  "https://change-wld.vercel.app"      // dominio de tu app en producción
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn("🚫 Bloqueado por CORS:", origin);
+        callback(new Error("No permitido por CORS"));
+      }
+    },
+    methods: ["GET", "POST", "PUT"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
 app.use(express.json({ limit: "1mb" }));
 
 // ----------------- STORAGE -----------------
