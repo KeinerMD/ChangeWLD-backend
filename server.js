@@ -223,31 +223,40 @@ app.get("/api/config", (_, res) => {
 });
 
 
+// ====== CACHE LOCAL (para estabilidad en Render) ======
+let cachedRate = null;
+let lastFetchTime = 0;
+
+// ========= TASA WLD → COP =========
 app.get("/api/rate", async (_, res) => {
   try {
-    console.log("📡 Solicitando precios...");
+    // Si hace menos de 60 segundos desde la última consulta, devolver el cache
+    const now = Date.now();
+    if (cachedRate && now - lastFetchTime < 60_000) {
+      console.log("🟢 Usando tasa cacheada");
+      return res.json({ ...cachedRate, cached: true });
+    }
 
-    // Intentar obtener precio desde Binance
+    console.log("📡 Solicitando precios de Binance y ER-API...");
+
+    // -------- Intentar obtener desde Binance --------
     let wldUsd = null;
-    let usdCop = null;
-
     try {
       const binanceResp = await fetch(
         "https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT",
         { agent, timeout: 4000 }
       );
       if (binanceResp.ok) {
-        const binance = await binanceResp.json();
-        wldUsd = parseFloat(binance?.price);
+        const data = await binanceResp.json();
+        wldUsd = parseFloat(data?.price);
         console.log("✅ Binance OK:", wldUsd);
-      } else {
-        console.warn("⚠️ Binance no respondió correctamente");
-      }
+      } else console.warn("⚠️ Binance error:", binanceResp.status);
     } catch (e) {
-      console.warn("⚠️ Error Binance:", e.message);
+      console.warn("⚠️ Binance no accesible:", e.message);
     }
 
-    // Intentar obtener tasa USD→COP
+    // -------- Intentar obtener USD→COP --------
+    let usdCop = null;
     try {
       const fxResp = await fetch("https://open.er-api.com/v6/latest/USD", {
         agent,
@@ -257,21 +266,20 @@ app.get("/api/rate", async (_, res) => {
         const fx = await fxResp.json();
         usdCop = Number(fx?.rates?.COP);
         console.log("✅ ER-API OK:", usdCop);
-      } else {
-        console.warn("⚠️ ER-API no respondió correctamente");
-      }
+      } else console.warn("⚠️ ER-API error:", fxResp.status);
     } catch (e) {
-      console.warn("⚠️ Error ER-API:", e.message);
+      console.warn("⚠️ ER-API no accesible:", e.message);
     }
 
-    // Si alguna de las dos falló, usar valores de respaldo
-    if (!Number.isFinite(wldUsd)) wldUsd = 2.4; // valor aproximado WLD/USDT
-    if (!Number.isFinite(usdCop)) usdCop = 4100; // valor promedio COP/USD
+    // -------- Fallback si algo falló --------
+    if (!Number.isFinite(wldUsd)) wldUsd = 2.4;
+    if (!Number.isFinite(usdCop)) usdCop = 4100;
 
     const wldCopBruto = wldUsd * usdCop;
     const wldCopUsuario = wldCopBruto * (1 - SPREAD);
 
-    res.json({
+    // -------- Respuesta --------
+    cachedRate = {
       ok: true,
       wld_usd: wldUsd,
       usd_cop: usdCop,
@@ -279,9 +287,14 @@ app.get("/api/rate", async (_, res) => {
       wld_cop_usuario: Number(wldCopUsuario.toFixed(2)),
       spread_percent: SPREAD * 100,
       fuente:
-        (wldUsd && usdCop ? "Binance + ER-API" : "fallback interno (modo seguro)"),
+        Number.isFinite(wldUsd) && Number.isFinite(usdCop)
+          ? "Binance + ER-API"
+          : "Fallback local",
       fecha: new Date().toISOString(),
-    });
+    };
+    lastFetchTime = now;
+
+    res.json(cachedRate);
   } catch (e) {
     console.error("💥 Error en /api/rate:", e.message);
     res.status(500).json({
@@ -291,8 +304,6 @@ app.get("/api/rate", async (_, res) => {
     });
   }
 });
-
-
 
 // ========= CREAR ORDEN =========
 app.post("/api/orders", async (req, res) => {
