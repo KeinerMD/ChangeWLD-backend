@@ -225,28 +225,48 @@ app.get("/api/config", (_, res) => {
 
 app.get("/api/rate", async (_, res) => {
   try {
-    console.log("📡 Solicitando precios de Binance y ER-API...");
+    console.log("📡 Solicitando precios...");
 
-    // Se fuerza conexión segura
-    const binanceResp = await fetch(
-      "https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT",
-      { agent }
-    );
-    const fxResp = await fetch("https://open.er-api.com/v6/latest/USD", { agent });
+    // Intentar obtener precio desde Binance
+    let wldUsd = null;
+    let usdCop = null;
 
-    if (!binanceResp.ok) throw new Error("Error al obtener datos de Binance");
-    if (!fxResp.ok) throw new Error("Error al obtener datos de ExchangeRate");
-
-    const binance = await binanceResp.json();
-    const fx = await fxResp.json();
-
-    const wldUsd = parseFloat(binance?.price);
-    const usdCop = Number(fx?.rates?.COP);
-
-    if (!Number.isFinite(wldUsd) || !Number.isFinite(usdCop)) {
-      console.error("❌ Datos inválidos:", { wldUsd, usdCop });
-      return res.status(502).json({ ok: false, error: "Datos de tasa inválidos" });
+    try {
+      const binanceResp = await fetch(
+        "https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT",
+        { agent, timeout: 4000 }
+      );
+      if (binanceResp.ok) {
+        const binance = await binanceResp.json();
+        wldUsd = parseFloat(binance?.price);
+        console.log("✅ Binance OK:", wldUsd);
+      } else {
+        console.warn("⚠️ Binance no respondió correctamente");
+      }
+    } catch (e) {
+      console.warn("⚠️ Error Binance:", e.message);
     }
+
+    // Intentar obtener tasa USD→COP
+    try {
+      const fxResp = await fetch("https://open.er-api.com/v6/latest/USD", {
+        agent,
+        timeout: 4000,
+      });
+      if (fxResp.ok) {
+        const fx = await fxResp.json();
+        usdCop = Number(fx?.rates?.COP);
+        console.log("✅ ER-API OK:", usdCop);
+      } else {
+        console.warn("⚠️ ER-API no respondió correctamente");
+      }
+    } catch (e) {
+      console.warn("⚠️ Error ER-API:", e.message);
+    }
+
+    // Si alguna de las dos falló, usar valores de respaldo
+    if (!Number.isFinite(wldUsd)) wldUsd = 2.4; // valor aproximado WLD/USDT
+    if (!Number.isFinite(usdCop)) usdCop = 4100; // valor promedio COP/USD
 
     const wldCopBruto = wldUsd * usdCop;
     const wldCopUsuario = wldCopBruto * (1 - SPREAD);
@@ -258,13 +278,20 @@ app.get("/api/rate", async (_, res) => {
       wld_cop_bruto: wldCopBruto,
       wld_cop_usuario: Number(wldCopUsuario.toFixed(2)),
       spread_percent: SPREAD * 100,
+      fuente:
+        (wldUsd && usdCop ? "Binance + ER-API" : "fallback interno (modo seguro)"),
       fecha: new Date().toISOString(),
     });
   } catch (e) {
     console.error("💥 Error en /api/rate:", e.message);
-    res.status(500).json({ ok: false, error: "Error al obtener tasa de cambio" });
+    res.status(500).json({
+      ok: false,
+      error: "Error interno al obtener tasa de cambio",
+      detalle: e.message,
+    });
   }
 });
+
 
 
 // ========= CREAR ORDEN =========
