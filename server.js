@@ -122,55 +122,34 @@ let cachedRate = null;
 let lastFetchTime = 0;
 
 // 💱 Endpoint de tasa WLD→COP
-// ========= TASA WLD → COP =========
+// ========= TASA WLD → COP (Binance + ExchangeRate.host + Spread 25%) =========
 app.get("/api/rate", async (_, res) => {
   try {
-    console.log("📡 Solicitando precios...");
+    console.log("📡 Obteniendo tasa en vivo desde Binance + ExchangeRate.host");
 
-    let wldUsd = null;
-    let usdCop = null;
+    const SPREAD = 0.25; // comisión operativa 25%
+    const agent = new https.Agent({ rejectUnauthorized: false });
 
-    // --- 1️⃣ Obtener WLD/USDT desde Binance ---
-    try {
-      const binanceResp = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT", { agent, timeout: 4000 });
-      if (binanceResp.ok) {
-        const binance = await binanceResp.json();
-        wldUsd = parseFloat(binance?.price);
-        console.log("✅ Binance WLD/USDT:", wldUsd);
-      }
-    } catch (e) {
-      console.warn("⚠️ Binance no disponible:", e.message);
-    }
+    // 1️⃣ Precio WLD/USDT desde Binance
+    const binanceResp = await fetch(
+      "https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT",
+      { agent, timeout: 5000 }
+    );
+    const binanceData = await binanceResp.json();
+    const wldUsd = parseFloat(binanceData.price);
 
-    // --- 2️⃣ Obtener USD→COP desde ExchangeRate.host ---
-    try {
-      const fxResp = await fetch("https://api.exchangerate.host/latest?base=USD&symbols=COP", { agent, timeout: 4000 });
-      if (fxResp.ok) {
-        const fx = await fxResp.json();
-        usdCop = Number(fx?.rates?.COP);
-        console.log("✅ ExchangeRate.host USD/COP:", usdCop);
-      }
-    } catch (e) {
-      console.warn("⚠️ Error obteniendo USD/COP:", e.message);
-    }
+    // 2️⃣ Tasa USD→COP desde ExchangeRate.host
+    const fxResp = await fetch("https://api.exchangerate.host/latest?base=USD&symbols=COP", {
+      agent,
+      timeout: 5000,
+    });
+    const fxData = await fxResp.json();
+    const usdCop = Number(fxData?.rates?.COP);
 
-    // --- 3️⃣ Fallbacks automáticos (por si alguna API falla) ---
-    if (!Number.isFinite(usdCop) || usdCop < 2000 || usdCop > 5000) {
-      usdCop = 3700; // valor de respaldo razonable
-      console.log("⚙️ Fallback USD/COP aplicado:", usdCop);
-    }
-
-    if (!Number.isFinite(wldUsd) || wldUsd <= 0) {
-      wldUsd = 2.4; // valor de respaldo razonable
-      console.log("⚙️ Fallback WLD/USDT aplicado:", wldUsd);
-    }
-
-    // --- 4️⃣ Calcular tasas ---
-    const SPREAD = 0.25; // 25% de comisión operativa
+    // 3️⃣ Calcular tasa en COP con spread
     const wldCopBruto = wldUsd * usdCop;
     const wldCopUsuario = wldCopBruto * (1 - SPREAD);
 
-    // --- 5️⃣ Enviar respuesta ---
     res.json({
       ok: true,
       wld_usd: Number(wldUsd.toFixed(4)),
@@ -178,19 +157,19 @@ app.get("/api/rate", async (_, res) => {
       wld_cop_bruto: Number(wldCopBruto.toFixed(2)),
       wld_cop_usuario: Number(wldCopUsuario.toFixed(2)),
       spread_percent: SPREAD * 100,
-      fuente: "Binance + ExchangeRate.host (automático)",
+      fuente: "Binance + ExchangeRate.host (en vivo)",
       fecha: new Date().toISOString(),
     });
-
-  } catch (e) {
-    console.error("💥 Error en /api/rate:", e.message);
+  } catch (err) {
+    console.error("💥 Error en /api/rate:", err.message);
     res.status(500).json({
       ok: false,
       error: "Error interno al obtener tasa de cambio",
-      detalle: e.message,
+      detalle: err.message,
     });
   }
 });
+
 
 // 🧾 Crear orden
 app.post("/api/orders", (req, res) => {
