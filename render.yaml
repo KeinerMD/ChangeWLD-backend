@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: changewld-backend
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: TEST_MODE
+        value: true
+      - key: PORT
+        value: 4000
+      - key: SPREAD
+        value: 0.15
+      - key: OPERATOR_PIN
+        value: 4321
+      - key: WALLET_DESTINO
+        value: 0xEe437AdE80ed0Aaa0C8a4bBb3dEC5786Bcf31cf1
+      - key: WORLDCHAIN_RPC
+        value: https://ethereum-sepolia.publicnode.com
+      - key: KEYSTORE_PATH
+        value: C:/Users/Kaleth/changewld-keytools/keystore.json
+      - key: KEYSTORE_PASSWORD
+        value: 200575318
