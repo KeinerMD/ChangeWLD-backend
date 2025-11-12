@@ -5,7 +5,6 @@
 import dotenv from "dotenv";
 import path from "path";
 import express from "express";
-import cors from "cors";
 import helmet from "helmet";
 import fs from "fs";
 import fetch from "node-fetch";
@@ -15,18 +14,16 @@ import https from "https";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// .env
+// ========= CARGA VARIABLES .ENV =========
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 
-// ========= CONFIG =========
+// ========= CONFIGURACIÓN =========
 const PORT = Number(process.env.PORT || 4000);
 const TEST_MODE = (process.env.TEST_MODE || "true").toLowerCase() === "true";
-// Comisión por defecto 25% si no está en .env
-const SPREAD = Number(process.env.SPREAD ?? "0.25");
+const SPREAD = Number(process.env.SPREAD ?? "0.25"); // comisión 25%
 const OPERATOR_PIN = (process.env.OPERATOR_PIN || "4321").trim();
 const WALLET_DESTINO = (process.env.WALLET_DESTINO || "").trim();
 
-// (opcionales para futura fase on-chain)
 const WORLDCHAIN_RPC = process.env.WORLDCHAIN_RPC || "";
 const KEYSTORE_PATH = process.env.KEYSTORE_PATH || "";
 const KEYSTORE_PASSWORD = process.env.KEYSTORE_PASSWORD || "";
@@ -38,51 +35,29 @@ const agent = new https.Agent({ rejectUnauthorized: false });
 app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
-// ========= CORS (Vercel + local) =========
-// Asegúrate de poner aquí SOLO tus dominios reales de producción.
+// ==============================
+// ✅ CORS (Render + Vercel + Local)
+// ==============================
 const allowedOrigins = [
   "http://localhost:5173",             // desarrollo local
   "https://changewld1.vercel.app",     // producción (Vercel)
-  "https://changewld-backend-1.onrender.com" // Render backend (para pruebas internas)
+  "https://changewld-backend-1.onrender.com", // backend Render
 ];
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.warn("🚫 Bloqueado por CORS:", origin);
-        callback(new Error("No permitido por CORS"));
-      }
-    },
-    methods: ["GET", "POST", "PUT"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
 app.use((req, res, next) => {
-  // Manejo manual de preflight para mayor compatibilidad
   const origin = req.headers.origin;
-  if (!origin || allowedOrigins.includes(origin)) {
-    res.header("Access-Control-Allow-Origin", origin || "*");
-    res.header("Vary", "Origin");
-    res.header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (allowedOrigins.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
   }
-  if (req.method === "OPTIONS") return res.sendStatus(204);
+  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204); // responde rápido a preflight
+  }
   next();
 });
 
-app.use(
-  cors({
-    origin: (origin, cb) =>
-      !origin || allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error("CORS bloqueado")),
-    methods: ["GET", "POST", "PUT", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
-
-// ========= LOG ARRANQUE =========
+// ========= LOG DE ARRANQUE =========
 console.log("🟢 ChangeWLD iniciando...");
 console.log("🔐 PIN operador:", OPERATOR_PIN);
 console.log("🌍 Orígenes permitidos:", allowedOrigins.join(", "));
@@ -123,7 +98,9 @@ function writeStore(data) {
   }
 }
 
-// ========= ENDPOINTS BÁSICOS =========
+// ==============================
+// 🩺 ENDPOINTS BÁSICOS
+// ==============================
 app.get("/", (_, res) => res.send("🚀 ChangeWLD backend v1.0 OK"));
 
 app.get("/api/health", (_, res) =>
@@ -140,7 +117,9 @@ app.get("/api/config", (_, res) =>
   })
 );
 
-// ========= /api/rate (Cache + Binance + ExchangeRate + Fallback) =========
+// ==============================
+// 💱 /api/rate (Binance + ExchangeRate + Cache + 25% Spread)
+// ==============================
 let cachedRate = null;
 let lastFetchTime = 0;
 
@@ -159,7 +138,7 @@ app.get("/api/rate", async (_, res) => {
     let wldUsd = null;
     let usdCop = null;
 
-    // Binance: WLD/USDT
+    // --- Binance: WLD/USDT ---
     try {
       const r = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT", {
         agent,
@@ -176,7 +155,7 @@ app.get("/api/rate", async (_, res) => {
       console.warn("⚠️ Binance error:", e.message);
     }
 
-    // ExchangeRate.host: USD->COP
+    // --- ExchangeRate.host: USD→COP ---
     try {
       const r = await fetch("https://api.exchangerate.host/latest?base=USD&symbols=COP", {
         agent,
@@ -195,12 +174,11 @@ app.get("/api/rate", async (_, res) => {
 
     // Fallbacks
     if (!Number.isFinite(wldUsd)) {
-      // si falla, usa aproximado de mercado
-      wldUsd = 0.76;
+      wldUsd = 0.76; // fallback WLD/USD
       console.log("🔁 fallback WLD/USD =", wldUsd);
     }
     if (!Number.isFinite(usdCop)) {
-      usdCop = 3700;
+      usdCop = 3700; // fallback USD/COP
       console.log("🔁 fallback USD/COP =", usdCop);
     }
 
@@ -229,7 +207,9 @@ app.get("/api/rate", async (_, res) => {
   }
 });
 
-// ========= ÓRDENES =========
+// ==============================
+// 🧾 ÓRDENES
+// ==============================
 app.post("/api/orders", (req, res) => {
   try {
     const { nombre, correo, banco, titular, numero, montoWLD, montoCOP } = req.body;
@@ -259,7 +239,6 @@ app.post("/api/orders", (req, res) => {
     writeStore(store);
 
     if (TEST_MODE) {
-      // Simular avance de estado
       const refreshed = readStore();
       const idx = refreshed.orders.findIndex((o) => o.id === nueva.id);
       if (idx !== -1) {
