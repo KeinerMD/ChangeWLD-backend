@@ -41,11 +41,25 @@ app.use(express.json({ limit: "1mb" }));
 // ========= CORS (Vercel + local) =========
 // Asegúrate de poner aquí SOLO tus dominios reales de producción.
 const allowedOrigins = [
-  "http://localhost:5173",
-  "https://changewld1.vercel.app",
-  "https://change-wld.vercel.app",
+  "http://localhost:5173",             // desarrollo local
+  "https://changewld1.vercel.app",     // producción (Vercel)
+  "https://changewld-backend-1.onrender.com" // Render backend (para pruebas internas)
 ];
 
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn("🚫 Bloqueado por CORS:", origin);
+        callback(new Error("No permitido por CORS"));
+      }
+    },
+    methods: ["GET", "POST", "PUT"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 app.use((req, res, next) => {
   // Manejo manual de preflight para mayor compatibilidad
   const origin = req.headers.origin;
