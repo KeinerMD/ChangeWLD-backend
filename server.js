@@ -42,7 +42,7 @@ app.use(express.json({ limit: "1mb" }));
 // ✅ CORS seguro y compatible con Vercel + local
 const allowedOrigins = [
   "http://localhost:5173",              // desarrollo local
-  "https://changewld.vercel.app",       // tu dominio en producción
+  "https://vercel.com/kaleths-projects-b5a556a1/change-wld-frontend-112k/24v1XqipQJ63uPc3Q1sGokKmwFUe",       // tu dominio en producción
   "https://changewld1.vercel.app",      // tu dominio alternativo o nuevo
 ];
 
