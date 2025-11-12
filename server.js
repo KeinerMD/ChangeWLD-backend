@@ -39,22 +39,20 @@ app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
 // ========= CONFIG CORS (✅ 100% compatible con Vercel + Render) =========
+// ✅ CORS seguro y compatible con Vercel + local
 const allowedOrigins = [
-  "http://localhost:5173",
-  "https://change-wld.vercel.app",
-  "https://change-wld.vercel.app/",
-  "https://changewld-backend.onrender.com",
-  "https://changewld-backend.onrender.com/"
+  "http://localhost:5173",              // desarrollo local
+  "https://changewld.vercel.app",       // tu dominio en producción
+  "https://changewld1.vercel.app",      // tu dominio alternativo o nuevo
 ];
 
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin || allowedOrigins.some(o => origin.startsWith(o))) {
-        console.log("✅ CORS permitido:", origin);
+      if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        console.warn("🚫 CORS bloqueado:", origin);
+        console.warn("🚫 Bloqueado por CORS:", origin);
         callback(new Error("No permitido por CORS"));
       }
     },
@@ -62,6 +60,7 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
 
 // ========= LOG DE ARRANQUE =========
 console.log("🟢 Iniciando servidor ChangeWLD...");
