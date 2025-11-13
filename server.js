@@ -213,9 +213,19 @@ app.get("/api/rate", async (_, res) => {
 app.post("/api/orders", (req, res) => {
   try {
     const { nombre, correo, banco, titular, numero, montoWLD, montoCOP } = req.body;
-    if (!nombre || !correo || !banco || !titular || !numero || !montoWLD || !montoCOP) {
-      return res.status(400).json({ ok: false, error: "Campos incompletos" });
-    }
+    if (!nombre || !correo || !banco || !titular || !numero || !montoWLD || !montoCOP)
+  return res.status(400).json({ ok: false, error: "Campos incompletos" });
+
+// 🔒 Solo permitir Nequi y Llave Bre-B
+const bancosPermitidos = ["Nequi", "Llave Bre-B"];
+
+if (!bancosPermitidos.includes(banco)) {
+  return res.status(400).json({
+    ok: false,
+    error: "Banco no permitido. Solo aceptamos Nequi o Llave Bre-B.",
+  });
+}
+
 
     const store = readStore();
     const nueva = {
