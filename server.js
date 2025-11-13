@@ -325,6 +325,58 @@ app.put("/api/orders/:id/estado", (req, res) => {
 // ========= 404 =========
 app.use((_, res) => res.status(404).json({ error: "Ruta no encontrada" }));
 
+// ========= DETECCIÓN AUTOMÁTICA DE WLD RECIBIDOS =========
+
+// Usa la wallet destino configurada en .env
+// Ejemplo: WALLET_DESTINO = "0x12ab34cd56..."
+let lastKnownBalance = 0;
+
+// Simulación simple de balance en WorldChain
+async function getWalletBalance() {
+  try {
+    const r = await fetch(`https://worldchain-api.worldcoin.org/wallet/${WALLET_DESTINO}/balance`);
+    if (!r.ok) return lastKnownBalance;
+    const j = await r.json();
+    return Number(j.balance || 0);
+  } catch {
+    return lastKnownBalance;
+  }
+}
+
+async function autoDetectWLD() {
+  const store = readStore();
+  const pendingOrders = store.orders.filter((o) => o.estado === "pendiente");
+
+  if (pendingOrders.length === 0) return;
+
+  const currentBalance = await getWalletBalance();
+
+  console.log("🔎 Revisando wallet… balance:", currentBalance);
+
+  for (const order of pendingOrders) {
+    const expected = Number(order.montoWLD);
+
+    if (currentBalance >= lastKnownBalance + expected) {
+      console.log(`🟣 Se detectó recepción de ${expected} WLD para orden #${order.id}`);
+
+      order.estado = "recibida_wld";
+      order.tx_hash = `AUTO_${Date.now()}`;
+      order.status_history.push({
+        at: new Date().toISOString(),
+        to: "recibida_wld",
+      });
+      order.actualizada_en = new Date().toISOString();
+    }
+  }
+
+  writeStore(store);
+  lastKnownBalance = currentBalance;
+}
+
+// Ejecutar cada 5 segundos
+setInterval(autoDetectWLD, 5000);
+
+
 // ========= START =========
 app.listen(PORT, () => {
   console.log(`🚀 Backend listo en puerto ${PORT} (TEST_MODE=${TEST_MODE})`);
