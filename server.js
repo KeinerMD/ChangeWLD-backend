@@ -80,6 +80,55 @@ function writeStore(data) {
 // ==============================
 app.get("/", (_, res) => res.send("🚀 ChangeWLD backend running OK"));
 
+app.post("/api/verify-world-id", async (req, res) => {
+  try {
+    const {
+      proof,
+      merkle_root,
+      nullifier_hash,
+      verification_level,
+      action,
+    } = req.body;
+
+    if (!proof || !merkle_root || !nullifier_hash || !action) {
+      return res.status(400).json({ ok: false, error: "Datos incompletos del proof" });
+    }
+
+    // Endpoint oficial World ID Actions
+    const verifyURL = "https://developer.worldcoin.org/api/v2/verify";
+
+    const body = {
+      action, // debe coincidir EXACTO con tu acción: "verify-changewld"
+      signal: "changewld", // puedes poner cualquier string
+      proof,
+      merkle_root,
+      nullifier_hash,
+    };
+
+    const resp = await fetch(verifyURL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const data = await resp.json();
+
+    if (data.success) {
+      return res.json({ ok: true, message: "Proof verificado correctamente" });
+    } else {
+      return res.json({
+        ok: false,
+        error: data.code || "Proof inválido",
+        detail: data.detail || null,
+      });
+    }
+  } catch (err) {
+    console.error("Error verificando proof:", err);
+    return res.status(500).json({ ok: false, error: "Error interno" });
+  }
+});
+
+
 // ==============================
 // 💱 API RATE
 // ==============================
