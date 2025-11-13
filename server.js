@@ -1,5 +1,5 @@
 // ==============================
-// 🚀 ChangeWLD Backend v1.0 (estable para Render + Vercel)
+// 🚀 ChangeWLD Backend v1.0 (Optimizado + Nivel 3 Real)
 // ==============================
 
 import dotenv from "dotenv";
@@ -14,20 +14,14 @@ import https from "https";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ========= CARGA VARIABLES .ENV =========
+// ========= CARGAR .ENV =========
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 
-// ========= CONFIGURACIÓN =========
 const PORT = Number(process.env.PORT || 4000);
 const TEST_MODE = (process.env.TEST_MODE || "true").toLowerCase() === "true";
-const SPREAD = Number(process.env.SPREAD ?? "0.25"); // comisión 25%
+const SPREAD = Number(process.env.SPREAD ?? "0.25");
 const OPERATOR_PIN = (process.env.OPERATOR_PIN || "4321").trim();
 const WALLET_DESTINO = (process.env.WALLET_DESTINO || "").trim();
-
-const WORLDCHAIN_RPC = process.env.WORLDCHAIN_RPC || "";
-const KEYSTORE_PATH = process.env.KEYSTORE_PATH || "";
-const KEYSTORE_PASSWORD = process.env.KEYSTORE_PASSWORD || "";
-const WLD_TOKEN_ADDRESS = (process.env.WLD_TOKEN_ADDRESS || "").trim();
 
 const app = express();
 const agent = new https.Agent({ rejectUnauthorized: false });
@@ -36,12 +30,11 @@ app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
 // ==============================
-// ✅ CORS (Render + Vercel + Local)
+// CORS PROFESIONAL
 // ==============================
 const allowedOrigins = [
-  "http://localhost:5173",             // desarrollo local
-  "https://changewld1.vercel.app",     // producción (Vercel)
-  "https://changewld-backend-1.onrender.com", // backend Render
+  "http://localhost:5173",
+  "https://changewld1.vercel.app",
 ];
 
 app.use((req, res, next) => {
@@ -51,19 +44,13 @@ app.use((req, res, next) => {
   }
   res.header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204); // responde rápido a preflight
-  }
+  if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
-// ========= LOG DE ARRANQUE =========
-console.log("🟢 ChangeWLD iniciando...");
-console.log("🔐 PIN operador:", OPERATOR_PIN);
-console.log("🌍 Orígenes permitidos:", allowedOrigins.join(", "));
-console.log("💰 SPREAD:", SPREAD);
-
-// ========= STORAGE =========
+// ==============================
+// STORAGE
+// ==============================
 const ORDERS_FILE = path.join(__dirname, "orders.json");
 
 function ensureOrdersFile() {
@@ -72,53 +59,29 @@ function ensureOrdersFile() {
       ORDERS_FILE,
       JSON.stringify({ orders: [], lastId: 0 }, null, 2)
     );
-    console.log("🆕 Archivo orders.json creado.");
   }
 }
 
 function readStore() {
   ensureOrdersFile();
   try {
-    const data = JSON.parse(fs.readFileSync(ORDERS_FILE, "utf8"));
-    if (!data || typeof data !== "object" || !Array.isArray(data.orders)) {
-      return { orders: [], lastId: 0 };
-    }
-    return data;
-  } catch (e) {
-    console.error("⚠️ Error leyendo orders.json:", e.message);
+    return JSON.parse(fs.readFileSync(ORDERS_FILE, "utf8"));
+  } catch {
     return { orders: [], lastId: 0 };
   }
 }
 
 function writeStore(data) {
-  try {
-    fs.writeFileSync(ORDERS_FILE, JSON.stringify(data, null, 2));
-  } catch (e) {
-    console.error("❌ Error escribiendo orders.json:", e.message);
-  }
+  fs.writeFileSync(ORDERS_FILE, JSON.stringify(data, null, 2));
 }
 
 // ==============================
-// 🩺 ENDPOINTS BÁSICOS
+// ENDPOINTS BASE
 // ==============================
-app.get("/", (_, res) => res.send("🚀 ChangeWLD backend v1.0 OK"));
-
-app.get("/api/health", (_, res) =>
-  res.json({ ok: true, test_mode: TEST_MODE, now: new Date().toISOString() })
-);
-
-app.get("/api/config", (_, res) =>
-  res.json({
-    walletDestino: WALLET_DESTINO,
-    spreadPercent: SPREAD * 100,
-    testMode: TEST_MODE,
-    rpcUrl: WORLDCHAIN_RPC || null,
-    wldToken: WLD_TOKEN_ADDRESS || null,
-  })
-);
+app.get("/", (_, res) => res.send("🚀 ChangeWLD backend running OK"));
 
 // ==============================
-// 💱 /api/rate (Binance + ExchangeRate + Cache + 25% Spread)
+// 💱 API RATE
 // ==============================
 let cachedRate = null;
 let lastFetchTime = 0;
@@ -126,118 +89,76 @@ let lastFetchTime = 0;
 app.get("/api/rate", async (_, res) => {
   try {
     const now = Date.now();
-    const CACHE_TTL = 60_000; // 1 minuto
-
-    if (cachedRate && now - lastFetchTime < CACHE_TTL) {
-      console.log("🟢 /api/rate desde caché");
+    if (cachedRate && now - lastFetchTime < 60_000) {
       return res.json({ ...cachedRate, cached: true });
     }
 
-    console.log("📡 Consultando Binance + ExchangeRate.host...");
+    let wldUsd, usdCop;
 
-    let wldUsd = null;
-    let usdCop = null;
-
-    // --- Binance: WLD/USDT ---
+    // Binance
     try {
-      const r = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT", {
-        agent,
-        timeout: 6000,
-      });
-      if (r.ok) {
-        const j = await r.json();
-        wldUsd = parseFloat(j?.price);
-        console.log("✅ WLD/USDT:", wldUsd);
-      } else {
-        console.warn("⚠️ Binance status:", r.status);
-      }
-    } catch (e) {
-      console.warn("⚠️ Binance error:", e.message);
+      const r = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT");
+      const j = await r.json();
+      wldUsd = parseFloat(j.price);
+    } catch {
+      wldUsd = 0.76;
     }
 
-    // --- ExchangeRate.host: USD→COP ---
+    // FX
     try {
-      const r = await fetch("https://api.exchangerate.host/latest?base=USD&symbols=COP", {
-        agent,
-        timeout: 6000,
-      });
-      if (r.ok) {
-        const j = await r.json();
-        usdCop = Number(j?.rates?.COP);
-        console.log("✅ USD→COP:", usdCop);
-      } else {
-        console.warn("⚠️ FX status:", r.status);
-      }
-    } catch (e) {
-      console.warn("⚠️ FX error:", e.message);
+      const r = await fetch("https://api.exchangerate.host/latest?base=USD&symbols=COP");
+      const j = await r.json();
+      usdCop = Number(j.rates.COP);
+    } catch {
+      usdCop = 3700;
     }
 
-    // Fallbacks
-    if (!Number.isFinite(wldUsd)) {
-      wldUsd = 0.76; // fallback WLD/USD
-      console.log("🔁 fallback WLD/USD =", wldUsd);
-    }
-    if (!Number.isFinite(usdCop)) {
-      usdCop = 3700; // fallback USD/COP
-      console.log("🔁 fallback USD/COP =", usdCop);
-    }
+    const bruto = wldUsd * usdCop;
+    const usuario = bruto * (1 - SPREAD);
 
-    const wldCopBruto = wldUsd * usdCop;
-    const wldCopUsuario = wldCopBruto * (1 - SPREAD);
-
-    const ratePayload = {
+    cachedRate = {
       ok: true,
-      wld_usd: Number(wldUsd.toFixed(6)),
-      usd_cop: Number(usdCop.toFixed(2)),
-      wld_cop_bruto: Number(wldCopBruto.toFixed(2)),
-      wld_cop_usuario: Number(wldCopUsuario.toFixed(2)),
+      wld_usd: wldUsd,
+      usd_cop: usdCop,
+      wld_cop_bruto: bruto,
+      wld_cop_usuario: usuario,
       spread_percent: SPREAD * 100,
-      fuente: "Binance + ExchangeRate.host (cache y fallback)",
-      fecha: new Date().toISOString(),
     };
 
-    cachedRate = ratePayload;
     lastFetchTime = now;
+    res.json(cachedRate);
 
-    console.log("✅ /api/rate actualizado:", ratePayload);
-    res.json(ratePayload);
   } catch (err) {
-    console.error("💥 /api/rate error:", err.message);
-    res.status(500).json({ ok: false, error: "Error obteniendo tasa", detalle: err.message });
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
 // ==============================
-// 🧾 ÓRDENES
+// 📦 CREAR ORDEN
 // ==============================
 app.post("/api/orders", (req, res) => {
   try {
     const { nombre, correo, banco, titular, numero, montoWLD, montoCOP } = req.body;
-    if (!nombre || !correo || !banco || !titular || !numero || !montoWLD || !montoCOP)
-  return res.status(400).json({ ok: false, error: "Campos incompletos" });
 
-// 🔒 Solo permitir Nequi y Llave Bre-B
-const bancosPermitidos = ["Nequi", "Llave Bre-B"];
-
-if (!bancosPermitidos.includes(banco)) {
-  return res.status(400).json({
-    ok: false,
-    error: "Banco no permitido. Solo aceptamos Nequi o Llave Bre-B.",
-  });
-}
-
+    const bancosPermitidos = ["Nequi", "Llave Bre-B"];
+    if (!bancosPermitidos.includes(banco)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Banco no permitido.",
+      });
+    }
 
     const store = readStore();
+
     const nueva = {
       id: ++store.lastId,
-      nombre: String(nombre).trim(),
-      correo: String(correo).trim(),
-      banco: String(banco).trim(),
-      titular: String(titular).trim(),
-      numero: String(numero).trim(),
+      nombre,
+      correo,
+      banco,
+      titular,
+      numero,
       montoWLD: Number(montoWLD),
       montoCOP: Number(montoCOP),
-      walletDestino: WALLET_DESTINO,
       estado: "pendiente",
       tx_hash: null,
       creada_en: new Date().toISOString(),
@@ -248,136 +169,72 @@ if (!bancosPermitidos.includes(banco)) {
     store.orders.unshift(nueva);
     writeStore(store);
 
-    if (TEST_MODE) {
-      const refreshed = readStore();
-      const idx = refreshed.orders.findIndex((o) => o.id === nueva.id);
-      if (idx !== -1) {
-        refreshed.orders[idx].estado = "enviada";
-        refreshed.orders[idx].tx_hash = `SIMULATED_TX_${Date.now()}`;
-        refreshed.orders[idx].status_history.push({
-          at: new Date().toISOString(),
-          to: "enviada",
-        });
-        refreshed.orders[idx].actualizada_en = new Date().toISOString();
-        writeStore(refreshed);
-      }
-    }
+    res.json({ ok: true, orden: nueva });
 
-    const finalStore = readStore();
-    const finalOrder = finalStore.orders.find((o) => o.id === nueva.id);
-    res.json({ ok: true, orden: finalOrder });
-  } catch (e) {
-    console.error("❌ create order:", e.message);
-    res.status(500).json({ ok: false, error: "Error interno" });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-app.get("/api/orders/:id", (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: "ID inválido" });
+// ==============================
+// 🔎 NIVEL 3 – DETECCIÓN REAL
+// ==============================
+const WORLDCHAIN_API = "https://worldchain-api.worldcoin.org";
+let processedTxs = new Set();
 
-  const store = readStore();
-  const orden = store.orders.find((o) => o.id === id);
-  if (!orden) return res.status(404).json({ error: "Orden no encontrada" });
-  res.json(orden);
-});
-
-app.get("/api/orders-admin", (req, res) => {
-  const pin = (req.query.pin || "").trim();
-  if (pin !== OPERATOR_PIN) return res.status(403).json({ error: "PIN inválido" });
-
-  const store = readStore();
-  res.json(store.orders);
-});
-
-app.put("/api/orders/:id/estado", (req, res) => {
-  const pin = (req.body?.pin || "").trim();
-  if (pin !== OPERATOR_PIN) return res.status(403).json({ error: "PIN inválido" });
-
-  const id = Number(req.params.id);
-  const estado = (req.body?.estado || "").trim();
-
-  const validos = ["pendiente", "enviada", "recibida_wld", "pagada", "rechazada"];
-  if (!validos.includes(estado)) return res.status(400).json({ error: "Estado inválido" });
-
-  const store = readStore();
-  const idx = store.orders.findIndex((o) => o.id === id);
-  if (idx === -1) return res.status(404).json({ error: "Orden no encontrada" });
-
-  const orden = store.orders[idx];
-  if (!Array.isArray(orden.status_history)) orden.status_history = [];
-
-  orden.estado = estado;
-  orden.status_history.push({ at: new Date().toISOString(), to: estado });
-  orden.actualizada_en = new Date().toISOString();
-
-  if (estado === "pagada" && !orden.tx_hash) {
-    orden.tx_hash = `TX_CONFIRMED_${Date.now()}`;
-  }
-
-  store.orders[idx] = orden;
-  writeStore(store);
-
-  console.log(`✅ Orden #${id} -> ${estado}`);
-  res.json({ ok: true, orden });
-});
-
-// ========= 404 =========
-app.use((_, res) => res.status(404).json({ error: "Ruta no encontrada" }));
-
-// ========= DETECCIÓN AUTOMÁTICA DE WLD RECIBIDOS =========
-
-// Usa la wallet destino configurada en .env
-// Ejemplo: WALLET_DESTINO = "0x12ab34cd56..."
-let lastKnownBalance = 0;
-
-// Simulación simple de balance en WorldChain
-async function getWalletBalance() {
+async function getIncomingWLDTransfers() {
   try {
-    const r = await fetch(`https://worldchain-api.worldcoin.org/wallet/${WALLET_DESTINO}/balance`);
-    if (!r.ok) return lastKnownBalance;
-    const j = await r.json();
-    return Number(j.balance || 0);
+    const url = `${WORLDCHAIN_API}/wallet/${WALLET_DESTINO}/transfers?limit=20`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+
+    return data?.transfers?.filter(
+      (tx) => tx.direction === "IN" && tx.token_symbol === "WLD"
+    ) || [];
+
   } catch {
-    return lastKnownBalance;
+    return [];
   }
 }
 
-async function autoDetectWLD() {
+async function autoDetectWLD_Real() {
   const store = readStore();
-  const pendingOrders = store.orders.filter((o) => o.estado === "pendiente");
+  const pending = store.orders.filter((o) => o.estado === "pendiente");
 
-  if (pendingOrders.length === 0) return;
+  if (!pending.length) return;
 
-  const currentBalance = await getWalletBalance();
+  const transfers = await getIncomingWLDTransfers();
+  if (!transfers.length) return;
 
-  console.log("🔎 Revisando wallet… balance:", currentBalance);
+  for (let order of pending) {
+    const match = transfers.find(
+      (tx) =>
+        !processedTxs.has(tx.transaction_hash) &&
+        Number(tx.amount) === Number(order.montoWLD)
+    );
 
-  for (const order of pendingOrders) {
-    const expected = Number(order.montoWLD);
-
-    if (currentBalance >= lastKnownBalance + expected) {
-      console.log(`🟣 Se detectó recepción de ${expected} WLD para orden #${order.id}`);
-
+    if (match) {
       order.estado = "recibida_wld";
-      order.tx_hash = `AUTO_${Date.now()}`;
+      order.tx_hash = match.transaction_hash;
+      order.actualizada_en = new Date().toISOString();
       order.status_history.push({
         at: new Date().toISOString(),
         to: "recibida_wld",
       });
-      order.actualizada_en = new Date().toISOString();
+
+      processedTxs.add(match.transaction_hash);
     }
   }
 
   writeStore(store);
-  lastKnownBalance = currentBalance;
 }
 
-// Ejecutar cada 5 segundos
-setInterval(autoDetectWLD, 5000);
+// cada 5s
+setInterval(autoDetectWLD_Real, 5000);
 
-
-// ========= START =========
+// ==============================
+// START
+// ==============================
 app.listen(PORT, () => {
-  console.log(`🚀 Backend listo en puerto ${PORT} (TEST_MODE=${TEST_MODE})`);
+  console.log(`🚀 Backend listo en puerto ${PORT}`);
 });
