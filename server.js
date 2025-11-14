@@ -131,50 +131,61 @@ app.post("/api/verify-world-id", async (req, res) => {
 });
 
 // ==============================
-// 💱 TASA OFICIAL WLD → COP
+// 💱 API RATE (versión estable)
 // ==============================
+let cachedRate = null;
+let lastFetchTime = 0;
+
 app.get("/api/rate", async (_, res) => {
   try {
-    let wldUsd = 0;
-    let usdCop = 0;
-
-    // Binance WLD/USDT
-    try {
-      const r = await fetch(
-        "https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT"
-      );
-      const j = await r.json();
-      wldUsd = parseFloat(j.price);
-    } catch (e) {
-      console.log("Error WLD→USD Binance:", e.message);
-      wldUsd = 0.76;
+    const now = Date.now();
+    if (cachedRate && now - lastFetchTime < 60_000) {
+      return res.json({ ...cachedRate, cached: true });
     }
 
-    // USD → COP oficial ER-API
+    let wldUsd = 0.76;
+    let usdCop = 4000;
+
+    // --- Precio WLD ---
+    try {
+      const r = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT");
+      const j = await r.json();
+      if (j?.price) wldUsd = parseFloat(j.price);
+    } catch (err) {
+      console.log("Error WLDUSDT, usando fallback:", err.message);
+    }
+
+    // --- USD -> COP ---
     try {
       const r = await fetch("https://open.er-api.com/v6/latest/USD");
       const j = await r.json();
-      usdCop = Number(j.rates.COP);
+      if (j?.rates?.COP) usdCop = j.rates.COP;
+      else console.log("ER-API devolvió formato inesperado:", j);
     } catch (err) {
-      console.log("Error USD→COP:", err.message);
-      usdCop = 3900;
+      console.log("Error USD->COP, usando fallback:", err.message);
     }
 
     const bruto = wldUsd * usdCop;
     const usuario = bruto * (1 - SPREAD);
 
-    res.json({
+    cachedRate = {
       ok: true,
       wld_usd: wldUsd,
       usd_cop: usdCop,
       wld_cop_bruto: bruto,
       wld_cop_usuario: usuario,
       spread_percent: SPREAD * 100,
-    });
+    };
+
+    lastFetchTime = now;
+    res.json(cachedRate);
+
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    console.error("Fatal en /api/rate:", err);
+    res.status(500).json({ ok: false, error: "Rate fatal" });
   }
 });
+
 
 // ==============================
 // 📦 CREAR ORDEN
