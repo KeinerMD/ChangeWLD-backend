@@ -17,7 +17,7 @@ const __dirname = path.dirname(__filename);
 // ========= CARGAR .ENV =========
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 
-const PORT = Number(process.env.PORT || 4000);
+const PORT = process.env.PORT || 4000;
 const TEST_MODE = (process.env.TEST_MODE || "true").toLowerCase() === "true";
 const SPREAD = Number(process.env.SPREAD ?? "0.25");
 const OPERATOR_PIN = (process.env.OPERATOR_PIN || "4321").trim();
