@@ -86,30 +86,27 @@ app.post("/api/verify-world-id", async (req, res) => {
       merkle_root,
       nullifier_hash,
       verification_level,
+      credential_type,
       action,
       signal,
     } = req.body;
 
     if (!WORLD_APP_API_KEY) {
-      return res.status(500).json({
-        ok: false,
-        error: "Backend sin WORLD_APP_API_KEY",
-      });
+      return res.status(500).json({ ok: false, error: "Missing API key" });
     }
 
-    if (!proof || !merkle_root || !nullifier_hash || !action) {
-      return res.status(400).json({ ok: false, error: "Datos incompletos" });
-    }
+    const verifyURL = "https://developer.worldcoin.org/api/v1/verify";
 
-    const verifyURL = "https://developer.worldcoin.org/api/v2/verify";
-
-    const body = {
-      action, // "verify-changewld"
+    const payload = {
+      proof: {
+        merkle_root,
+        nullifier_hash,
+        proof,
+        credential_type: credential_type || "orb",
+        verification_level,
+      },
+      action,
       signal: signal || "changewld",
-      proof,
-      merkle_root,
-      nullifier_hash,
-      verification_level,
     };
 
     const resp = await fetch(verifyURL, {
@@ -118,7 +115,7 @@ app.post("/api/verify-world-id", async (req, res) => {
         "Content-Type": "application/json",
         Authorization: `Bearer ${WORLD_APP_API_KEY}`,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     });
 
     const data = await resp.json();
@@ -126,17 +123,18 @@ app.post("/api/verify-world-id", async (req, res) => {
     if (resp.status === 200 && data.success) {
       return res.json({ ok: true, verified: true });
     } else {
-      return res.json({
+      return res.status(400).json({
         ok: false,
-        error: data.code || "Proof inválido",
+        error: data.code || "Invalid proof",
         detail: data.detail || null,
       });
     }
   } catch (err) {
-    console.error("Error WorldID:", err);
-    return res.status(500).json({ ok: false, error: "Error interno" });
+    console.error("World ID Error:", err);
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
+
 
 // ==============================
 // 💱 API RATE
