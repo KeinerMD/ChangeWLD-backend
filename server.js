@@ -1,5 +1,5 @@
 // ==============================
-// 🚀 ChangeWLD Backend v1.0 (Optimizado + Nivel 3 Real)
+// 🚀 ChangeWLD Backend v2.0 (Optimizado + World ID + Render)
 // ==============================
 
 import dotenv from "dotenv";
@@ -18,10 +18,10 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 
 const PORT = process.env.PORT || 4000;
-const TEST_MODE = (process.env.TEST_MODE || "true").toLowerCase() === "true";
 const SPREAD = Number(process.env.SPREAD ?? "0.25");
-const OPERATOR_PIN = (process.env.OPERATOR_PIN || "4321").trim();
-const WALLET_DESTINO = (process.env.WALLET_DESTINO || "").trim();
+const OPERATOR_PIN = process.env.OPERATOR_PIN || "4321";
+const WALLET_DESTINO = process.env.WALLET_DESTINO || "";
+const WORLD_APP_API_KEY = process.env.WORLD_APP_API_KEY;
 
 const app = express();
 const agent = new https.Agent({ rejectUnauthorized: false });
@@ -30,7 +30,7 @@ app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
 // ==============================
-// CORS PROFESIONAL
+// CORS
 // ==============================
 const allowedOrigins = [
   "http://localhost:5173",
@@ -64,11 +64,7 @@ function ensureOrdersFile() {
 
 function readStore() {
   ensureOrdersFile();
-  try {
-    return JSON.parse(fs.readFileSync(ORDERS_FILE, "utf8"));
-  } catch {
-    return { orders: [], lastId: 0 };
-  }
+  return JSON.parse(fs.readFileSync(ORDERS_FILE, "utf8"));
 }
 
 function writeStore(data) {
@@ -76,10 +72,13 @@ function writeStore(data) {
 }
 
 // ==============================
-// ENDPOINTS BASE
+// ROOT
 // ==============================
-app.get("/", (_, res) => res.send("🚀 ChangeWLD backend running OK"));
+app.get("/", (_, res) => res.send("🚀 ChangeWLD backend OK"));
 
+// ==============================
+// 🌐 API — World ID Real
+// ==============================
 app.post("/api/verify-world-id", async (req, res) => {
   try {
     const {
@@ -88,33 +87,44 @@ app.post("/api/verify-world-id", async (req, res) => {
       nullifier_hash,
       verification_level,
       action,
+      signal,
     } = req.body;
 
-    if (!proof || !merkle_root || !nullifier_hash || !action) {
-      return res.status(400).json({ ok: false, error: "Datos incompletos del proof" });
+    if (!WORLD_APP_API_KEY) {
+      return res.status(500).json({
+        ok: false,
+        error: "Backend sin WORLD_APP_API_KEY",
+      });
     }
 
-    // Endpoint oficial World ID Actions
+    if (!proof || !merkle_root || !nullifier_hash || !action) {
+      return res.status(400).json({ ok: false, error: "Datos incompletos" });
+    }
+
     const verifyURL = "https://developer.worldcoin.org/api/v2/verify";
 
     const body = {
-      action, // debe coincidir EXACTO con tu acción: "verify-changewld"
-      signal: "changewld", // puedes poner cualquier string
+      action, // "verify-changewld"
+      signal: signal || "changewld",
       proof,
       merkle_root,
       nullifier_hash,
+      verification_level,
     };
 
     const resp = await fetch(verifyURL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${WORLD_APP_API_KEY}`,
+      },
       body: JSON.stringify(body),
     });
 
     const data = await resp.json();
 
-    if (data.success) {
-      return res.json({ ok: true, message: "Proof verificado correctamente" });
+    if (resp.status === 200 && data.success) {
+      return res.json({ ok: true, verified: true });
     } else {
       return res.json({
         ok: false,
@@ -123,11 +133,10 @@ app.post("/api/verify-world-id", async (req, res) => {
       });
     }
   } catch (err) {
-    console.error("Error verificando proof:", err);
+    console.error("Error WorldID:", err);
     return res.status(500).json({ ok: false, error: "Error interno" });
   }
 });
-
 
 // ==============================
 // 💱 API RATE
@@ -144,7 +153,6 @@ app.get("/api/rate", async (_, res) => {
 
     let wldUsd, usdCop;
 
-    // Binance
     try {
       const r = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT");
       const j = await r.json();
@@ -153,7 +161,6 @@ app.get("/api/rate", async (_, res) => {
       wldUsd = 0.76;
     }
 
-    // FX
     try {
       const r = await fetch("https://api.exchangerate.host/latest?base=USD&symbols=COP");
       const j = await r.json();
@@ -176,7 +183,6 @@ app.get("/api/rate", async (_, res) => {
 
     lastFetchTime = now;
     res.json(cachedRate);
-
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -191,10 +197,7 @@ app.post("/api/orders", (req, res) => {
 
     const bancosPermitidos = ["Nequi", "Llave Bre-B"];
     if (!bancosPermitidos.includes(banco)) {
-      return res.status(400).json({
-        ok: false,
-        error: "Banco no permitido.",
-      });
+      return res.status(400).json({ ok: false, error: "Banco no permitido." });
     }
 
     const store = readStore();
@@ -219,67 +222,56 @@ app.post("/api/orders", (req, res) => {
     writeStore(store);
 
     res.json({ ok: true, orden: nueva });
-
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
 // ==============================
-// 🔎 NIVEL 3 – DETECCIÓN REAL
+// 📤 ADMIN — Obtener todas
 // ==============================
-const WORLDCHAIN_API = "https://worldchain-api.worldcoin.org";
-let processedTxs = new Set();
-
-async function getIncomingWLDTransfers() {
-  try {
-    const url = `${WORLDCHAIN_API}/wallet/${WALLET_DESTINO}/transfers?limit=20`;
-    const resp = await fetch(url);
-    const data = await resp.json();
-
-    return data?.transfers?.filter(
-      (tx) => tx.direction === "IN" && tx.token_symbol === "WLD"
-    ) || [];
-
-  } catch {
-    return [];
+app.get("/api/orders-admin", (req, res) => {
+  const pin = req.query.pin;
+  if (pin !== OPERATOR_PIN) {
+    return res.status(403).json({ error: "PIN inválido" });
   }
-}
 
-async function autoDetectWLD_Real() {
   const store = readStore();
-  const pending = store.orders.filter((o) => o.estado === "pendiente");
+  res.json(store.orders);
+});
 
-  if (!pending.length) return;
+// ==============================
+// 🔄 CAMBIAR ESTADO
+// ==============================
+app.put("/api/orders/:id/estado", (req, res) => {
+  const pin = req.body.pin;
+  const estado = req.body.estado;
 
-  const transfers = await getIncomingWLDTransfers();
-  if (!transfers.length) return;
-
-  for (let order of pending) {
-    const match = transfers.find(
-      (tx) =>
-        !processedTxs.has(tx.transaction_hash) &&
-        Number(tx.amount) === Number(order.montoWLD)
-    );
-
-    if (match) {
-      order.estado = "recibida_wld";
-      order.tx_hash = match.transaction_hash;
-      order.actualizada_en = new Date().toISOString();
-      order.status_history.push({
-        at: new Date().toISOString(),
-        to: "recibida_wld",
-      });
-
-      processedTxs.add(match.transaction_hash);
-    }
+  if (pin !== OPERATOR_PIN) {
+    return res.status(403).json({ error: "PIN inválido" });
   }
+
+  const validos = ["pendiente", "enviada", "recibida_wld", "pagada", "rechazada"];
+  if (!validos.includes(estado)) {
+    return res.status(400).json({ error: "Estado inválido" });
+  }
+
+  const store = readStore();
+  const idx = store.orders.findIndex((o) => o.id === Number(req.params.id));
+
+  if (idx === -1) {
+    return res.status(404).json({ error: "Orden no encontrada" });
+  }
+
+  const orden = store.orders[idx];
+  orden.estado = estado;
+  orden.actualizada_en = new Date().toISOString();
+  orden.status_history.push({ at: new Date().toISOString(), to: estado });
 
   writeStore(store);
-}
 
-// cada 5s
-setInterval(autoDetectWLD_Real, 5000);
+  res.json({ ok: true, orden });
+});
 
 // ==============================
 // START
