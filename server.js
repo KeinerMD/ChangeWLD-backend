@@ -21,6 +21,7 @@ const SPREAD = Number(process.env.SPREAD ?? "0.25");
 const OPERATOR_PIN = process.env.OPERATOR_PIN || "4321";
 const WALLET_DESTINO = process.env.WALLET_DESTINO || "";
 const WORLD_APP_API_KEY = process.env.WORLD_APP_API_KEY;
+console.log("API KEY CARGADA:", WORLD_APP_API_KEY ? "OK" : "NO DETECTADA");
 
 // ==============================
 // APP BASE
