@@ -1,6 +1,5 @@
 // ==============================
-// 🚀 ChangeWLD Backend — MiniApp 2025 (v3 FINAL)
-// Compatible con World App MiniApps
+// 🚀 ChangeWLD Backend — versión estable 2025 (DEVICE)
 // ==============================
 
 import dotenv from "dotenv";
@@ -31,19 +30,13 @@ app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
 // ==============================
-// CORS
+// CORS (ABIERTO PARA PRUEBAS)
 // ==============================
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://changewld1.vercel.app",
-  "https://changewld.vercel.app",
-];
-
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
-    res.header("Access-Control-Allow-Origin", origin);
-  }
+  // Para pruebas, dejamos pasar cualquier origen
+  res.header("Access-Control-Allow-Origin", origin || "*");
+  res.header("Vary", "Origin");
   res.header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -51,7 +44,7 @@ app.use((req, res, next) => {
 });
 
 // ==============================
-// STORAGE
+// STORAGE (ordenes)
 // ==============================
 const ORDERS_FILE = path.join(__dirname, "orders.json");
 
@@ -76,7 +69,7 @@ function writeStore(data) {
 // ==============================
 // ROOT
 // ==============================
-app.get("/", (_, res) => res.send("🚀 ChangeWLD backend OK — MiniApp v3"));
+app.get("/", (_, res) => res.send("🚀 ChangeWLD backend OK"));
 
 // ==============================
 // 🌐 WORLD ID API (device / mini app)
@@ -92,12 +85,13 @@ app.post("/api/verify-world-id", async (req, res) => {
       signal,
     } = req.body;
 
+    console.log("🔹 Body recibido en /api/verify-world-id:", req.body);
+
     if (!WORLD_APP_API_KEY) {
       return res.status(500).json({ ok: false, error: "Missing WORLD_APP_API_KEY" });
     }
 
     if (!proof || !merkle_root || !nullifier_hash || !action) {
-      console.log("Body recibido en /api/verify-world-id:", req.body);
       return res.status(400).json({ ok: false, error: "Datos incompletos" });
     }
 
@@ -112,7 +106,7 @@ app.post("/api/verify-world-id", async (req, res) => {
       signal: signal || "changewld",
     };
 
-    console.log("Enviando a Worldcoin verify v2:", payload);
+    console.log("🔹 Enviando a Worldcoin verify v2:", payload);
 
     const resp = await fetch(verifyURL, {
       method: "POST",
@@ -124,7 +118,7 @@ app.post("/api/verify-world-id", async (req, res) => {
     });
 
     const data = await resp.json();
-    console.log("Respuesta de Worldcoin verify:", resp.status, data);
+    console.log("🔹 Respuesta de Worldcoin verify:", resp.status, data);
 
     if (resp.status === 200 && data.success) {
       return res.json({ ok: true, verified: true });
@@ -137,14 +131,13 @@ app.post("/api/verify-world-id", async (req, res) => {
       });
     }
   } catch (err) {
-    console.error("World ID Error:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    console.error("❌ World ID Error:", err);
+    return res.status(500).json({ ok: false, error: err.message || "Internal server error" });
   }
 });
 
-
 // ==============================
-// 💱 API RATE
+// 💱 API RATE (versión estable)
 // ==============================
 let cachedRate = null;
 let lastFetchTime = 0;
@@ -159,22 +152,23 @@ app.get("/api/rate", async (_, res) => {
     let wldUsd = 0.76;
     let usdCop = 4000;
 
-    // --- WLD price
+    // --- Precio WLD ---
     try {
       const r = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT");
       const j = await r.json();
       if (j?.price) wldUsd = parseFloat(j.price);
     } catch (err) {
-      console.log("Error WLDUSDT:", err.message);
+      console.log("Error WLDUSDT, usando fallback:", err.message);
     }
 
-    // --- USD COP
+    // --- USD -> COP ---
     try {
       const r = await fetch("https://open.er-api.com/v6/latest/USD");
       const j = await r.json();
       if (j?.rates?.COP) usdCop = j.rates.COP;
+      else console.log("ER-API devolvió formato inesperado:", j);
     } catch (err) {
-      console.log("Error USD->COP:", err.message);
+      console.log("Error USD->COP, usando fallback:", err.message);
     }
 
     const bruto = wldUsd * usdCop;
@@ -191,7 +185,9 @@ app.get("/api/rate", async (_, res) => {
 
     lastFetchTime = now;
     res.json(cachedRate);
+
   } catch (err) {
+    console.error("Fatal en /api/rate:", err);
     res.status(500).json({ ok: false, error: "Rate fatal" });
   }
 });
