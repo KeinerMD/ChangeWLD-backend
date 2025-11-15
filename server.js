@@ -146,7 +146,7 @@ app.post("/api/verify-world-id", async (req, res) => {
 });
 
 // ==============================
-// 💱 API RATE (versión estable)
+// 💱 API RATE (versión mejorada con flags)
 // ==============================
 let cachedRate = null;
 let lastFetchTime = 0;
@@ -154,18 +154,28 @@ let lastFetchTime = 0;
 app.get("/api/rate", async (_, res) => {
   try {
     const now = Date.now();
+    // Cache 60 s
     if (cachedRate && now - lastFetchTime < 60_000) {
       return res.json({ ...cachedRate, cached: true });
     }
 
     let wldUsd = 0.76;
     let usdCop = 4000;
+    let wldFromFallback = true;
+    let usdCopFromFallback = true;
 
-    // --- Precio WLD ---
+    // --- Precio WLD/USDT ---
     try {
-      const r = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT");
+      const r = await fetch(
+        "https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT"
+      );
       const j = await r.json();
-      if (j?.price) wldUsd = parseFloat(j.price);
+      if (j && j.price) {
+        wldUsd = parseFloat(j.price);
+        wldFromFallback = false;
+      } else {
+        console.log("Respuesta inesperada de Binance WLDUSDT:", j);
+      }
     } catch (err) {
       console.log("Error WLDUSDT, usando fallback:", err.message);
     }
@@ -174,8 +184,12 @@ app.get("/api/rate", async (_, res) => {
     try {
       const r = await fetch("https://open.er-api.com/v6/latest/USD");
       const j = await r.json();
-      if (j?.rates?.COP) usdCop = j.rates.COP;
-      else console.log("ER-API devolvió formato inesperado:", j);
+      if (j && j.rates && j.rates.COP) {
+        usdCop = Number(j.rates.COP);
+        usdCopFromFallback = false;
+      } else {
+        console.log("ER-API devolvió formato inesperado:", j);
+      }
     } catch (err) {
       console.log("Error USD->COP, usando fallback:", err.message);
     }
@@ -190,16 +204,20 @@ app.get("/api/rate", async (_, res) => {
       wld_cop_bruto: bruto,
       wld_cop_usuario: usuario,
       spread_percent: SPREAD * 100,
+      wld_from_fallback: wldFromFallback,
+      usd_cop_from_fallback: usdCopFromFallback,
     };
 
     lastFetchTime = now;
     res.json(cachedRate);
-
   } catch (err) {
     console.error("Fatal en /api/rate:", err);
-    res.status(500).json({ ok: false, error: "Rate fatal" });
+    res
+      .status(500)
+      .json({ ok: false, error: "Rate fatal", detail: err.message });
   }
 });
+
 
 // ==============================
 // 📦 CREAR ORDEN
