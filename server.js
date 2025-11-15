@@ -146,7 +146,7 @@ app.post("/api/verify-world-id", async (req, res) => {
 });
 
 // ==============================
-// 💱 API RATE (versión mejorada con flags)
+// 💱 API RATE (mejorada: Binance + Coingecko + flags)
 // ==============================
 let cachedRate = null;
 let lastFetchTime = 0;
@@ -159,12 +159,12 @@ app.get("/api/rate", async (_, res) => {
       return res.json({ ...cachedRate, cached: true });
     }
 
-    let wldUsd = 0.76;
-    let usdCop = 4000;
+    let wldUsd = 0.76;   // fallback por defecto
+    let usdCop = 4000;   // fallback por defecto
     let wldFromFallback = true;
     let usdCopFromFallback = true;
 
-    // --- Precio WLD/USDT ---
+    // --- 1) Precio WLD/USDT en Binance ---
     try {
       const r = await fetch(
         "https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT"
@@ -173,27 +173,49 @@ app.get("/api/rate", async (_, res) => {
       if (j && j.price) {
         wldUsd = parseFloat(j.price);
         wldFromFallback = false;
+        console.log("✅ WLD_USD desde Binance:", wldUsd);
       } else {
-        console.log("Respuesta inesperada de Binance WLDUSDT:", j);
+        console.log("⚠️ Respuesta inesperada de Binance WLDUSDT:", j);
       }
     } catch (err) {
-      console.log("Error WLDUSDT, usando fallback:", err.message);
+      console.log("⚠️ Error WLDUSDT Binance:", err.message);
     }
 
-    // --- USD -> COP ---
+    // --- 1.b) Si Binance falló, intentar Coingecko ---
+    if (wldFromFallback) {
+      try {
+        const r = await fetch(
+          "https://api.coingecko.com/api/v3/simple/price?ids=worldcoin-wld&vs_currencies=usd"
+        );
+        const j = await r.json();
+        if (j && j["worldcoin-wld"] && j["worldcoin-wld"].usd) {
+          wldUsd = Number(j["worldcoin-wld"].usd);
+          wldFromFallback = false;
+          console.log("✅ WLD_USD desde Coingecko:", wldUsd);
+        } else {
+          console.log("⚠️ Respuesta inesperada de Coingecko:", j);
+        }
+      } catch (err) {
+        console.log("⚠️ Error WLDUSD Coingecko:", err.message);
+      }
+    }
+
+    // --- 2) USD -> COP ---
     try {
       const r = await fetch("https://open.er-api.com/v6/latest/USD");
       const j = await r.json();
       if (j && j.rates && j.rates.COP) {
         usdCop = Number(j.rates.COP);
         usdCopFromFallback = false;
+        console.log("✅ USD_COP desde ER-API:", usdCop);
       } else {
-        console.log("ER-API devolvió formato inesperado:", j);
+        console.log("⚠️ ER-API devolvió formato inesperado:", j);
       }
     } catch (err) {
-      console.log("Error USD->COP, usando fallback:", err.message);
+      console.log("⚠️ Error USD->COP, usando fallback:", err.message);
     }
 
+    // --- 3) Cálculos finales ---
     const bruto = wldUsd * usdCop;
     const usuario = bruto * (1 - SPREAD);
 
@@ -211,13 +233,10 @@ app.get("/api/rate", async (_, res) => {
     lastFetchTime = now;
     res.json(cachedRate);
   } catch (err) {
-    console.error("Fatal en /api/rate:", err);
-    res
-      .status(500)
-      .json({ ok: false, error: "Rate fatal", detail: err.message });
+    console.error("❌ Fatal en /api/rate:", err);
+    res.status(500).json({ ok: false, error: "Rate fatal", detail: err.message });
   }
 });
-
 
 // ==============================
 // 📦 CREAR ORDEN
