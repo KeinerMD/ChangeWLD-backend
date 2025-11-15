@@ -258,8 +258,8 @@ app.get("/api/orders/:id", (req, res) => {
 // ==============================
 // 🛠 ADMIN — Listar todas las órdenes (usado por /admin del front)
 // ==============================
-// El front llama a /rs-admin?pin=4321
-app.get("/rs-admin", (req, res) => {
+// El front llama a /api/orders-admin?pin=XXXX
+app.get("/api/orders-admin", (req, res) => {
   try {
     const pin = req.query.pin;
     if (pin !== OPERATOR_PIN) {
@@ -272,6 +272,7 @@ app.get("/rs-admin", (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
 
 // ==============================
 // 🛠 ADMIN — Cambiar estado de una orden
