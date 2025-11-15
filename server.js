@@ -237,6 +237,83 @@ app.post("/api/orders", (req, res) => {
 });
 
 // ==============================
+// 📦 OBTENER ORDEN POR ID (para refrescar estado en el front)
+// ==============================
+app.get("/api/orders/:id", (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const store = readStore();
+    const orden = store.orders.find((o) => o.id === id);
+
+    if (!orden) {
+      return res.status(404).json({ ok: false, error: "Orden no encontrada" });
+    }
+
+    res.json(orden);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==============================
+// 🛠 ADMIN — Listar todas las órdenes (usado por /admin del front)
+// ==============================
+// El front llama a /rs-admin?pin=4321
+app.get("/rs-admin", (req, res) => {
+  try {
+    const pin = req.query.pin;
+    if (pin !== OPERATOR_PIN) {
+      return res.status(403).json({ ok: false, error: "PIN inválido" });
+    }
+
+    const store = readStore();
+    res.json(store.orders);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==============================
+// 🛠 ADMIN — Cambiar estado de una orden
+// ==============================
+app.put("/api/orders/:id/estado", (req, res) => {
+  try {
+    const pin = req.body.pin;
+    const estado = req.body.estado;
+
+    if (pin !== OPERATOR_PIN) {
+      return res.status(403).json({ ok: false, error: "PIN inválido" });
+    }
+
+    const validos = ["pendiente", "enviada", "recibida_wld", "pagada", "rechazada"];
+    if (!validos.includes(estado)) {
+      return res.status(400).json({ ok: false, error: "Estado inválido" });
+    }
+
+    const store = readStore();
+    const idx = store.orders.findIndex((o) => o.id === Number(req.params.id));
+
+    if (idx === -1) {
+      return res.status(404).json({ ok: false, error: "Orden no encontrada" });
+    }
+
+    const orden = store.orders[idx];
+    orden.estado = estado;
+    orden.actualizada_en = new Date().toISOString();
+    if (!Array.isArray(orden.status_history)) {
+      orden.status_history = [];
+    }
+    orden.status_history.push({ at: new Date().toISOString(), to: estado });
+
+    writeStore(store);
+    res.json({ ok: true, orden });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+
+// ==============================
 // START
 // ==============================
 app.listen(PORT, () => {
