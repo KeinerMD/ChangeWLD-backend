@@ -79,50 +79,69 @@ function writeStore(data) {
 app.get("/", (_, res) => res.send("🚀 ChangeWLD backend OK — MiniApp v3"));
 
 // ==============================
-// 🌐 WORLD ID — MiniApps API (FINAL 2025)
+// 🌐 WORLD ID API (device / mini app)
 // ==============================
-
 app.post("/api/verify-world-id", async (req, res) => {
   try {
-    const verification_response = req.body.verification_response;
+    const {
+      proof,
+      merkle_root,
+      nullifier_hash,
+      verification_level,
+      action,
+      signal,
+    } = req.body;
 
-    if (!verification_response) {
-      return res.status(400).json({
-        verified: false,
-        error: "Missing verification_response",
-      });
+    if (!WORLD_APP_API_KEY) {
+      return res.status(500).json({ ok: false, error: "Missing WORLD_APP_API_KEY" });
     }
 
-    // Tu ACTION ID (de la MiniApp)
-    const ACTION_ID = "verify-changewld-v2";
+    if (!proof || !merkle_root || !nullifier_hash || !action) {
+      console.log("Body recibido en /api/verify-world-id:", req.body);
+      return res.status(400).json({ ok: false, error: "Datos incompletos" });
+    }
 
-    const resp = await fetch(
-      `https://developer.worldcoin.org/api/v1/verify/${ACTION_ID}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${WORLD_APP_API_KEY}`,
-        },
-        body: JSON.stringify({ verification_response }),
-      }
-    );
+    const verifyURL = "https://developer.worldcoin.org/api/v2/verify";
+
+    const payload = {
+      proof,
+      merkle_root,
+      nullifier_hash,
+      verification_level: verification_level || "device",
+      action,
+      signal: signal || "changewld",
+    };
+
+    console.log("Enviando a Worldcoin verify v2:", payload);
+
+    const resp = await fetch(verifyURL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${WORLD_APP_API_KEY}`,
+      },
+      body: JSON.stringify(payload),
+    });
 
     const data = await resp.json();
+    console.log("Respuesta de Worldcoin verify:", resp.status, data);
 
     if (resp.status === 200 && data.success) {
-      return res.json({ verified: true });
+      return res.json({ ok: true, verified: true });
+    } else {
+      return res.status(400).json({
+        ok: false,
+        verified: false,
+        error: data.code || "Invalid proof",
+        detail: data.detail || data,
+      });
     }
-
-    return res.json({
-      verified: false,
-      detail: data,
-    });
   } catch (err) {
     console.error("World ID Error:", err);
-    return res.status(500).json({ verified: false, error: "Internal server error" });
+    return res.status(500).json({ ok: false, error: "Internal server error" });
   }
 });
+
 
 // ==============================
 // 💱 API RATE
