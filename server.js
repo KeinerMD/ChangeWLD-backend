@@ -1,5 +1,6 @@
 // ==============================
-// 🚀 ChangeWLD Backend — versión estable 2025
+// 🚀 ChangeWLD Backend — MiniApp 2025 (v3 FINAL)
+// Compatible con World App MiniApps
 // ==============================
 
 import dotenv from "dotenv";
@@ -50,7 +51,7 @@ app.use((req, res, next) => {
 });
 
 // ==============================
-// STORAGE (ordenes)
+// STORAGE
 // ==============================
 const ORDERS_FILE = path.join(__dirname, "orders.json");
 
@@ -75,63 +76,56 @@ function writeStore(data) {
 // ==============================
 // ROOT
 // ==============================
-app.get("/", (_, res) => res.send("🚀 ChangeWLD backend OK"));
+app.get("/", (_, res) => res.send("🚀 ChangeWLD backend OK — MiniApp v3"));
 
 // ==============================
-// 🌐 WORLD ID API (v2)
+// 🌐 WORLD ID — MiniApps API (FINAL 2025)
 // ==============================
+
 app.post("/api/verify-world-id", async (req, res) => {
   try {
-    const {
-      proof,
-      merkle_root,
-      nullifier_hash,
-      verification_level,
-      credential_type,
-      action,
-      signal,
-    } = req.body;
+    const verification_response = req.body.verification_response;
 
-    if (!WORLD_APP_API_KEY) {
-      return res.status(500).json({ ok: false, error: "Missing API key" });
+    if (!verification_response) {
+      return res.status(400).json({
+        verified: false,
+        error: "Missing verification_response",
+      });
     }
 
-    const verifyURL = "https://developer.worldcoin.org/api/v2/verify";
+    // Tu ACTION ID (de la MiniApp)
+    const ACTION_ID = "verify-changewld-v2";
 
-    const payload = {
-      proof,
-      merkle_root,
-      nullifier_hash,
-      verification_level,
-      credential_type: credential_type || "orb",
-      action,
-      signal: signal || "changewld",
-    };
-
-    const resp = await fetch(verifyURL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${WORLD_APP_API_KEY}`,
-      },
-      body: JSON.stringify(payload),
-    });
+    const resp = await fetch(
+      `https://developer.worldcoin.org/api/v1/verify/${ACTION_ID}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${WORLD_APP_API_KEY}`,
+        },
+        body: JSON.stringify({ verification_response }),
+      }
+    );
 
     const data = await resp.json();
 
     if (resp.status === 200 && data.success) {
-      return res.json({ ok: true, verified: true });
+      return res.json({ verified: true });
     }
 
-    return res.status(400).json({ ok: false, error: data.code, detail: data.detail });
+    return res.json({
+      verified: false,
+      detail: data,
+    });
   } catch (err) {
     console.error("World ID Error:", err);
-    return res.status(500).json({ ok: false, error: "Internal server error" });
+    return res.status(500).json({ verified: false, error: "Internal server error" });
   }
 });
 
 // ==============================
-// 💱 API RATE (versión estable)
+// 💱 API RATE
 // ==============================
 let cachedRate = null;
 let lastFetchTime = 0;
@@ -146,23 +140,22 @@ app.get("/api/rate", async (_, res) => {
     let wldUsd = 0.76;
     let usdCop = 4000;
 
-    // --- Precio WLD ---
+    // --- WLD price
     try {
       const r = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=WLDUSDT");
       const j = await r.json();
       if (j?.price) wldUsd = parseFloat(j.price);
     } catch (err) {
-      console.log("Error WLDUSDT, usando fallback:", err.message);
+      console.log("Error WLDUSDT:", err.message);
     }
 
-    // --- USD -> COP ---
+    // --- USD COP
     try {
       const r = await fetch("https://open.er-api.com/v6/latest/USD");
       const j = await r.json();
       if (j?.rates?.COP) usdCop = j.rates.COP;
-      else console.log("ER-API devolvió formato inesperado:", j);
     } catch (err) {
-      console.log("Error USD->COP, usando fallback:", err.message);
+      console.log("Error USD->COP:", err.message);
     }
 
     const bruto = wldUsd * usdCop;
@@ -179,13 +172,10 @@ app.get("/api/rate", async (_, res) => {
 
     lastFetchTime = now;
     res.json(cachedRate);
-
   } catch (err) {
-    console.error("Fatal en /api/rate:", err);
     res.status(500).json({ ok: false, error: "Rate fatal" });
   }
 });
-
 
 // ==============================
 // 📦 CREAR ORDEN
