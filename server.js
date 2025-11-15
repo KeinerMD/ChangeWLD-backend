@@ -34,14 +34,23 @@ app.use(express.json({ limit: "1mb" }));
 // ==============================
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  // Para pruebas, dejamos pasar cualquier origen
-  res.header("Access-Control-Allow-Origin", origin || "*");
-  res.header("Vary", "Origin");
+
+  // Para este proyecto, dejamos CORS abierto para cualquier origen.
+  // Así funciona tanto desde Vercel como desde el webview de World App.
+  if (origin) {
+    res.header("Access-Control-Allow-Origin", origin);
+  } else {
+    // Peticiones sin cabecera Origin (algunos entornos) → permitir todas
+    res.header("Access-Control-Allow-Origin", "*");
+  }
+
   res.header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
+
 
 // ==============================
 // STORAGE (ordenes)
