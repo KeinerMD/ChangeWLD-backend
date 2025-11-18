@@ -9,6 +9,7 @@ import helmet from "helmet";
 import fs from "fs";
 import fetch from "node-fetch";
 import { fileURLToPath } from "url";
+import { verifyCloudProof } from "@worldcoin/minikit-js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +17,7 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 
 const PORT = process.env.PORT || 4000;
+const APP_ID = process.env.APP_ID || "app_fc346e88f08ed686748d6414d965f99"; // tu App ID
 const SPREAD = Number(process.env.SPREAD ?? "0.25");
 const OPERATOR_PIN = process.env.OPERATOR_PIN || "4321";
 const WALLET_DESTINO = process.env.WALLET_DESTINO || "";
@@ -81,96 +83,55 @@ function writeStore(data) {
 app.get("/", (_, res) => res.send("🚀 ChangeWLD backend OK"));
 
 // ==============================
-// 🌐 WORLD ID API (device / mini app + MiniKit)
+// 🌐 WORLD ID API (Mini App + MiniKit)
 // ==============================
 app.post("/api/verify-world-id", async (req, res) => {
   try {
-    let {
-      payload,          // cuando viene de MiniKit
-      action,
-      signal,
-      proof,
-      merkle_root,
-      nullifier_hash,
-      verification_level,
-    } = req.body;
+    const { payload, action, signal } = req.body;
 
-    // Soportar el nuevo formato (MiniKit) y el antiguo (directo)
-    if (payload) {
-      proof = payload.proof;
-      merkle_root = payload.merkle_root;
-      nullifier_hash = payload.nullifier_hash;
-      verification_level = payload.verification_level;
-    }
+    console.log("🔹 Body recibido en /api/verify-world-id:", req.body);
 
-    action =
-      action ||
-      payload?.action ||
-      "verify-changewld-v2";      // tu IDENTIFIER de acción
-    signal = signal || "changewld-device";
-
-    console.log("🔹 /api/verify-world-id body:", {
-      action,
-      signal,
-      verification_level,
-      hasPayload: !!payload,
-    });
-
-    if (!WORLD_APP_API_KEY) {
-      return res
-        .status(500)
-        .json({ ok: false, error: "Missing WORLD_APP_API_KEY" });
-    }
-
-    if (!proof || !merkle_root || !nullifier_hash || !action) {
+    if (!payload) {
       return res
         .status(400)
-        .json({ ok: false, error: "Datos incompletos para verificar" });
+        .json({ ok: false, verified: false, error: "Missing payload" });
     }
 
-    const verifyURL = "https://developer.worldcoin.org/api/v2/verify";
+    // Verificación usando el helper oficial de MiniKit
+    const verifyRes = await verifyCloudProof(
+      payload,
+      APP_ID,
+      action || "verify-changewld-device",
+      signal || "changewld-device"
+    );
 
-    const body = {
-      proof,
-      merkle_root,
-      nullifier_hash,
-      verification_level: verification_level || "device",
-      action,
-      signal,
-    };
+    console.log("🔹 Resultado verifyCloudProof:", verifyRes);
 
-    console.log("🔹 Enviando a Worldcoin /v2/verify:", body);
-
-    const resp = await fetch(verifyURL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${WORLD_APP_API_KEY}`,
-      },
-      body: JSON.stringify(body),
-    });
-
-    const data = await resp.json();
-    console.log("🔹 Respuesta Worldcoin:", resp.status, data);
-
-    if (resp.status === 200 && data.success) {
-      return res.json({ ok: true, verified: true, verifyRes: data });
+    if (verifyRes.success) {
+      return res.json({
+        ok: true,
+        verified: true,
+        nullifier_hash: payload.nullifier_hash,
+        verifyRes,
+      });
+    } else {
+      return res.status(400).json({
+        ok: false,
+        verified: false,
+        error: verifyRes.code || "Verification failed",
+        detail: verifyRes,
+      });
     }
-
-    return res.status(400).json({
-      ok: false,
-      verified: false,
-      error: data.code || "Invalid proof",
-      detail: data.detail || data,
-    });
   } catch (err) {
     console.error("❌ World ID Error:", err);
     return res.status(500).json({
       ok: false,
-      error: err.message || "Internal server error",
+      verified: false,
+      error: err?.message || "Internal server error",
     });
   }
 });
+
 
 // ==============================
 // 💱 API RATE (Coingecko + fallback)
