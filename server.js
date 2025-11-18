@@ -1,5 +1,5 @@
 // ==============================
-// 🚀 ChangeWLD Backend — versión estable 2025 (DEVICE)
+// 🚀 ChangeWLD Backend — versión estable 2025 (MiniKit)
 // ==============================
 
 import dotenv from "dotenv";
@@ -9,6 +9,8 @@ import helmet from "helmet";
 import fs from "fs";
 import fetch from "node-fetch";
 import { fileURLToPath } from "url";
+
+// 🔹 IMPORTANTE: añadimos verifyCloudProof desde minikit-js
 import { verifyCloudProof } from "@worldcoin/minikit-js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -17,13 +19,14 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, ".env") });
 
 const PORT = process.env.PORT || 4000;
-const APP_ID = process.env.APP_ID || "app_fc346e88f08ed686748d6414d965f99"; // tu App ID
 const SPREAD = Number(process.env.SPREAD ?? "0.25");
 const OPERATOR_PIN = process.env.OPERATOR_PIN || "4321";
 const WALLET_DESTINO = process.env.WALLET_DESTINO || "";
-const WORLD_APP_API_KEY = process.env.WORLD_APP_API_KEY;
 
-console.log("API KEY CARGADA:", WORLD_APP_API_KEY ? "OK" : "ERROR");
+// 🔹 NUEVO: APP_ID de tu app de Worldcoin Developer Portal
+const APP_ID = process.env.APP_ID; // ej: app_fc346e88f08ed686748d6414d965f99
+
+console.log("APP_ID:", APP_ID || "NO DEFINIDO");
 console.log("SPREAD:", SPREAD);
 console.log("Destino WLD:", WALLET_DESTINO);
 
@@ -32,30 +35,23 @@ app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
 // ==============================
-// CORS (ABIERTO PARA PRUEBAS)
+// CORS (abierto para pruebas)
 // ==============================
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-
-  // Para este proyecto, dejamos CORS abierto para cualquier origen.
-  // Así funciona tanto desde Vercel como desde el webview de World App.
   if (origin) {
     res.header("Access-Control-Allow-Origin", origin);
   } else {
-    // Peticiones sin cabecera Origin (algunos entornos) → permitir todas
     res.header("Access-Control-Allow-Origin", "*");
   }
-
   res.header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
-
 // ==============================
-// STORAGE (ordenes)
+// STORAGE (ordenes) – (igual que ya lo tienes)
 // ==============================
 const ORDERS_FILE = path.join(__dirname, "orders.json");
 
@@ -83,55 +79,52 @@ function writeStore(data) {
 app.get("/", (_, res) => res.send("🚀 ChangeWLD backend OK"));
 
 // ==============================
-// 🌐 WORLD ID API (Mini App + MiniKit)
+// 🌐 WORLD ID API (MiniKit verifyCloudProof)
 // ==============================
 app.post("/api/verify-world-id", async (req, res) => {
   try {
-    const { payload, action, signal } = req.body;
-
-    console.log("🔹 Body recibido en /api/verify-world-id:", req.body);
-
-    if (!payload) {
+    if (!APP_ID) {
       return res
-        .status(400)
-        .json({ ok: false, verified: false, error: "Missing payload" });
+        .status(500)
+        .json({ success: false, error: "APP_ID no configurado en el backend" });
     }
 
-    // Verificación usando el helper oficial de MiniKit
-    const verifyRes = await verifyCloudProof(
-      payload,
-      APP_ID,
-      action || "verify-changewld-device",
-      signal || "changewld-device"
-    );
+    const { payload, action, signal } = req.body;
+
+    console.log("🔹 Body recibido en /api/verify-world-id:");
+    console.log(JSON.stringify(req.body, null, 2));
+
+    if (!payload || payload.status !== "success") {
+      return res
+        .status(400)
+        .json({ success: false, error: "Payload inválido o incompleto" });
+    }
+
+    // Llamamos a verifyCloudProof tal como indica la docs
+    const verifyRes = await verifyCloudProof(payload, APP_ID, action, signal);
 
     console.log("🔹 Resultado verifyCloudProof:", verifyRes);
 
     if (verifyRes.success) {
+      // Aquí podrías marcar al usuario como verificado en BD, etc.
       return res.json({
-        ok: true,
-        verified: true,
-        nullifier_hash: payload.nullifier_hash,
+        success: true,
         verifyRes,
       });
     } else {
       return res.status(400).json({
-        ok: false,
-        verified: false,
-        error: verifyRes.code || "Verification failed",
-        detail: verifyRes,
+        success: false,
+        verifyRes,
       });
     }
   } catch (err) {
-    console.error("❌ World ID Error:", err);
+    console.error("❌ Error interno en /api/verify-world-id:", err);
     return res.status(500).json({
-      ok: false,
-      verified: false,
-      error: err?.message || "Internal server error",
+      success: false,
+      error: err?.message || "Error interno",
     });
   }
 });
-
 
 // ==============================
 // 💱 API RATE (Coingecko + fallback)
