@@ -24,7 +24,7 @@ const OPERATOR_PIN = process.env.OPERATOR_PIN || "4321";
 const WALLET_DESTINO = process.env.WALLET_DESTINO || "";
 
 // 🔹 NUEVO: APP_ID de tu app de Worldcoin Developer Portal
-const APP_ID = process.env.APP_ID; // ej: app_fc346e88f08ed686748d6414d965f99
+const APP_ID = process.env.APP_ID; 
 
 console.log("APP_ID:", APP_ID || "NO DEFINIDO");
 console.log("SPREAD:", SPREAD);
@@ -268,11 +268,25 @@ app.get("/api/orders/:id", (req, res) => {
   }
 });
 
-// ==============================
-// 🛠 ADMIN — Listar todas las órdenes (usado por /admin del front)
-// ==============================
-// El front llama a /api/orders-admin?pin=XXXX
-app.get("/api/orders-admin", (req, res) => {
+// 🛠 ADMIN — Listar todas las órdenes (versión nueva, más segura)
+// El front ahora llama a POST /api/orders-admin con { pin }
+app.post("/api/orders-admin", (req, res) => {
+  try {
+    const { pin } = req.body || {};
+    if (pin !== OPERATOR_PIN) {
+      return res.status(403).json({ ok: false, error: "PIN inválido" });
+    }
+
+    const store = readStore();
+    return res.json(store.orders);
+  } catch (err) {
+    console.error("Error en /api/orders-admin:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// (Opcional) Mantener compatibilidad con la ruta vieja GET /rs-admin?pin=...
+app.get("/rs-admin", (req, res) => {
   try {
     const pin = req.query.pin;
     if (pin !== OPERATOR_PIN) {
@@ -285,6 +299,7 @@ app.get("/api/orders-admin", (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
 
 
 // ==============================
