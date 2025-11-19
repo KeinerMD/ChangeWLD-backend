@@ -285,33 +285,49 @@ app.post("/api/orders-admin", (req, res) => {
   }
 });
 
-// (Opcional) Mantener compatibilidad con la ruta vieja GET /rs-admin?pin=...
-app.get("/rs-admin", (req, res) => {
+// ==============================
+// 🛠 ADMIN — Listar todas las órdenes
+// ==============================
+// Alias soportados:
+//   - /rs-admin?pin=XXXX         (viejo)
+//   - /api/orders-admin?pin=XXX  (nuevo, más "REST")
+// ==============================
+app.get(["/rs-admin", "/api/orders-admin"], (req, res) => {
   try {
-    const pin = req.query.pin;
-    if (pin !== OPERATOR_PIN) {
-      return res.status(403).json({ ok: false, error: "PIN inválido" });
+    if (!isValidAdminPin(req)) {
+      return res
+        .status(403)
+        .json({ ok: false, error: "PIN inválido o no autorizado" });
     }
 
     const store = readStore();
-    res.json(store.orders);
+    return res.json(store.orders);
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    console.error("❌ Error en /api/orders-admin:", err);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
+// ==============================
+// 🛡 Helper: validación de PIN admin
+// ==============================
+function isValidAdminPin(req) {
+  const pinFromQuery = req.query.pin;
+  const pinFromBody = req.body?.pin;
+  const pinFromHeader = req.headers["x-admin-pin"];
 
-
+  const candidate = pinFromHeader || pinFromQuery || pinFromBody || "";
+  return candidate === OPERATOR_PIN;
+}
 // ==============================
 // 🛠 ADMIN — Cambiar estado de una orden
 // ==============================
 app.put("/api/orders/:id/estado", (req, res) => {
   try {
-    const pin = req.body.pin;
     const estado = req.body.estado;
 
-    if (pin !== OPERATOR_PIN) {
-      return res.status(403).json({ ok: false, error: "PIN inválido" });
+    if (!isValidAdminPin(req)) {
+      return res.status(403).json({ ok: false, error: "PIN inválido o no autorizado" });
     }
 
     const validos = ["pendiente", "enviada", "recibida_wld", "pagada", "rechazada"];
@@ -337,9 +353,11 @@ app.put("/api/orders/:id/estado", (req, res) => {
     writeStore(store);
     res.json({ ok: true, orden });
   } catch (err) {
+    console.error("❌ Error en /api/orders/:id/estado:", err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
 
 
 // ==============================
