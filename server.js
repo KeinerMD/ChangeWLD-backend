@@ -204,15 +204,24 @@ app.get("/api/rate", async (_, res) => {
 // ==============================
 app.post("/api/orders", (req, res) => {
   try {
-    const { banco, titular, numero, montoWLD, montoCOP } = req.body;
+    const { banco, titular, numero, montoWLD, montoCOP, verified, nullifier } = req.body;
 
     const bancosPermitidos = ["Nequi", "Llave Bre-B"];
     if (!bancosPermitidos.includes(banco)) {
       return res.status(400).json({ ok: false, error: "Banco no permitido" });
     }
 
+    // 👇 Seguridad extra: no crear órdenes sin verificación World ID
+    if (!verified || !nullifier) {
+      return res.status(400).json({
+        ok: false,
+        error: "Orden sin verificación World ID",
+      });
+    }
+
     const store = readStore();
 
+    const ahora = new Date().toISOString();
     const nueva = {
       id: ++store.lastId,
       banco,
@@ -220,9 +229,14 @@ app.post("/api/orders", (req, res) => {
       numero,
       montoWLD: Number(montoWLD),
       montoCOP: Number(montoCOP),
+
+      // 🔒 Datos de verificación
+      verified: Boolean(verified),
+      nullifier: String(nullifier),
+
       estado: "pendiente",
-      creada_en: new Date().toISOString(),
-      actualizada_en: new Date().toISOString(),
+      creada_en: ahora,
+      actualizada_en: ahora,
     };
 
     store.orders.unshift(nueva);
@@ -233,6 +247,7 @@ app.post("/api/orders", (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
 
 // ==============================
 // 📦 OBTENER ORDEN POR ID (para refrescar estado en el front)
