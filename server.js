@@ -281,12 +281,12 @@ app.get("/api/orders/:id", (req, res) => {
 });
 
 // 🛠 ADMIN — Listar todas las órdenes (versión nueva, más segura)
-// El front ahora llama a POST /api/orders-admin con { pin }
 app.post("/api/orders-admin", (req, res) => {
   try {
-    const { pin } = req.body || {};
-    if (pin !== OPERATOR_PIN) {
-      return res.status(403).json({ ok: false, error: "PIN inválido" });
+    if (!isValidAdminPin(req)) {
+      return res
+        .status(403)
+        .json({ ok: false, error: "PIN inválido o no autorizado" });
     }
 
     const store = readStore();
