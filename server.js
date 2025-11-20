@@ -35,20 +35,34 @@ app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 
 // ==============================
-// CORS (abierto para pruebas)
+// CORS (abierto para pruebas + header de admin)
 // ==============================
+const ALLOWED_ORIGINS = [
+  "http://localhost:5173",
+  "https://changewld1.vercel.app",
+];
+
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin) {
-    res.header("Access-Control-Allow-Origin", origin);
-  } else {
-    res.header("Access-Control-Allow-Origin", "*");
+
+  if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin || "*");
   }
+
   res.header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  if (req.method === "OPTIONS") return res.sendStatus(204);
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, x-admin-pin"
+  );
+  res.header("Access-Control-Max-Age", "600"); // cache del preflight
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+
   next();
 });
+
 
 // ==============================
 // STORAGE (ordenes) – (igual que ya lo tienes)
