@@ -204,7 +204,16 @@ app.get("/api/rate", async (_, res) => {
 // ==============================
 app.post("/api/orders", (req, res) => {
   try {
-    const { banco, titular, numero, montoWLD, montoCOP, verified, nullifier } = req.body;
+    const {
+  banco,
+  titular,
+  numero,
+  montoWLD,
+  montoCOP,
+  verified,
+  nullifier,
+  wld_tx_id,        // 🔹 nuevo campo
+} = req.body;
 
     const bancosPermitidos = ["Nequi", "Llave Bre-B"];
     if (!bancosPermitidos.includes(banco)) {
@@ -223,21 +232,24 @@ app.post("/api/orders", (req, res) => {
 
     const ahora = new Date().toISOString();
     const nueva = {
-      id: ++store.lastId,
-      banco,
-      titular,
-      numero,
-      montoWLD: Number(montoWLD),
-      montoCOP: Number(montoCOP),
+  id: ++store.lastId,
+  banco,
+  titular,
+  numero,
+  montoWLD: Number(montoWLD),
+  montoCOP: Number(montoCOP),
 
-      // 🔒 Datos de verificación
-      verified: Boolean(verified),
-      nullifier: String(nullifier),
+  // 🔒 Datos de verificación
+  verified: Boolean(verified),
+  nullifier: String(nullifier),
 
-      estado: "pendiente",
-      creada_en: ahora,
-      actualizada_en: ahora,
-    };
+  // 🔹 NUEVO: id interno de la transacción en World App (para auditoría)
+  wld_tx_id: wld_tx_id ? String(wld_tx_id) : null,
+
+  estado: "pendiente",
+  creada_en: ahora,
+  actualizada_en: ahora,
+};
 
     store.orders.unshift(nueva);
     writeStore(store);
