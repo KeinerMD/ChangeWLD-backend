@@ -1,13 +1,13 @@
 // ==============================
-// 🚀 ChangeWLD Backend — versión estable 2025 (MiniKit)
+// 🚀 ChangeWLD Backend — versión estable 2025 (MiniKit) + MongoDB
 // ==============================
 
 import dotenv from "dotenv";
 import path from "path";
 import express from "express";
 import helmet from "helmet";
-import fs from "fs";
 import fetch from "node-fetch";
+import mongoose from "mongoose";
 import { fileURLToPath } from "url";
 
 // 🔹 IMPORTANTE: añadimos verifyCloudProof desde minikit-js
@@ -23,12 +23,17 @@ const SPREAD = Number(process.env.SPREAD ?? "0.25");
 const OPERATOR_PIN = process.env.OPERATOR_PIN || "4321";
 const WALLET_DESTINO = process.env.WALLET_DESTINO || "";
 
-// 🔹 NUEVO: APP_ID de tu app de Worldcoin Developer Portal
-const APP_ID = process.env.APP_ID; 
+// 🔹 APP_ID de tu app de Worldcoin Developer Portal
+const APP_ID = process.env.APP_ID;
+
+// 🔹 MongoDB
+const MONGO_URI = process.env.MONGO_URI || "";
+const MONGO_DB_NAME = process.env.MONGO_DB_NAME || undefined;
 
 console.log("APP_ID:", APP_ID || "NO DEFINIDO");
 console.log("SPREAD:", SPREAD);
 console.log("Destino WLD:", WALLET_DESTINO);
+console.log("MONGO_URI configurado:", !!MONGO_URI);
 
 const app = express();
 app.use(helmet());
@@ -63,28 +68,59 @@ app.use((req, res, next) => {
   next();
 });
 
-
 // ==============================
-// STORAGE (ordenes) – (igual que ya lo tienes)
+// MongoDB: conexión y modelos
 // ==============================
-const ORDERS_FILE = path.join(__dirname, "orders.json");
 
-function ensureOrdersFile() {
-  if (!fs.existsSync(ORDERS_FILE)) {
-    fs.writeFileSync(
-      ORDERS_FILE,
-      JSON.stringify({ orders: [], lastId: 0 }, null, 2)
-    );
-  }
+if (!MONGO_URI) {
+  console.warn(
+    "⚠️ No se definió MONGO_URI en el .env. El backend NO podrá guardar órdenes en la base de datos."
+  );
 }
 
-function readStore() {
-  ensureOrdersFile();
-  return JSON.parse(fs.readFileSync(ORDERS_FILE, "utf8"));
-}
+mongoose
+  .connect(MONGO_URI, { dbName: MONGO_DB_NAME })
+  .then(() => console.log("✅ Conectado a MongoDB"))
+  .catch((err) =>
+    console.error("❌ Error conectando a MongoDB:", err.message)
+  );
 
-function writeStore(data) {
-  fs.writeFileSync(ORDERS_FILE, JSON.stringify(data, null, 2));
+const counterSchema = new mongoose.Schema({
+  key: { type: String, unique: true },
+  value: { type: Number, default: 0 },
+});
+
+const orderSchema = new mongoose.Schema({
+  id: { type: Number, unique: true }, // id numérico que usa el frontend
+  banco: String,
+  titular: String,
+  numero: String,
+  montoWLD: Number,
+  montoCOP: Number,
+  verified: Boolean,
+  nullifier: String,
+  estado: { type: String, default: "pendiente" },
+  creada_en: String,
+  actualizada_en: String,
+  status_history: [
+    {
+      at: String,
+      to: String,
+    },
+  ],
+  wld_tx_id: String,
+});
+
+const Counter = mongoose.model("Counter", counterSchema);
+const Order = mongoose.model("Order", orderSchema);
+
+async function getNextOrderId() {
+  const doc = await Counter.findOneAndUpdate(
+    { key: "order" },
+    { $inc: { value: 1 } },
+    { new: true, upsert: true }
+  );
+  return doc.value;
 }
 
 // ==============================
@@ -114,13 +150,11 @@ app.post("/api/verify-world-id", async (req, res) => {
         .json({ success: false, error: "Payload inválido o incompleto" });
     }
 
-    // Llamamos a verifyCloudProof tal como indica la docs
     const verifyRes = await verifyCloudProof(payload, APP_ID, action, signal);
 
     console.log("🔹 Resultado verifyCloudProof:", verifyRes);
 
     if (verifyRes.success) {
-      // Aquí podrías marcar al usuario como verificado en BD, etc.
       return res.json({
         success: true,
         verifyRes,
@@ -149,12 +183,10 @@ let lastFetchTime = 0;
 app.get("/api/rate", async (_, res) => {
   try {
     const now = Date.now();
-    // Cache por 60s
     if (cachedRate && now - lastFetchTime < 60_000) {
       return res.json({ ...cachedRate, cached: true });
     }
 
-    // Valores por defecto (fallback)
     let wldUsd = 0.699;
     let usdCop = 3719;
     let wldCopBruto = wldUsd * usdCop;
@@ -162,15 +194,12 @@ app.get("/api/rate", async (_, res) => {
     let wldFromFallback = true;
     let usdCopFromFallback = true;
 
-    // -------- INTENTAR COINGECKO ----------
     try {
       const r = await fetch(
         "https://api.coingecko.com/api/v3/simple/price?ids=worldcoin-wld&vs_currencies=usd,cop"
       );
       const j = await r.json();
 
-      // Esperamos algo como:
-      // { "worldcoin-wld": { "usd": 2.13, "cop": 8000 } }
       const data = j["worldcoin-wld"];
       if (data && typeof data.usd === "number" && typeof data.cop === "number") {
         wldUsd = data.usd;
@@ -188,7 +217,6 @@ app.get("/api/rate", async (_, res) => {
       console.log("⚠️ Error llamando a Coingecko:", err.message);
     }
 
-    // -------- CÁLCULO PARA EL USUARIO ----------
     const usuario = wldCopBruto * (1 - SPREAD);
 
     cachedRate = {
@@ -212,29 +240,27 @@ app.get("/api/rate", async (_, res) => {
   }
 });
 
-
 // ==============================
 // 📦 CREAR ORDEN
 // ==============================
-app.post("/api/orders", (req, res) => {
+app.post("/api/orders", async (req, res) => {
   try {
     const {
-  banco,
-  titular,
-  numero,
-  montoWLD,
-  montoCOP,
-  verified,
-  nullifier,
-  wld_tx_id,        // 🔹 nuevo campo
-} = req.body;
+      banco,
+      titular,
+      numero,
+      montoWLD,
+      montoCOP,
+      verified,
+      nullifier,
+      wld_tx_id,
+    } = req.body;
 
     const bancosPermitidos = ["Nequi", "Llave Bre-B"];
     if (!bancosPermitidos.includes(banco)) {
       return res.status(400).json({ ok: false, error: "Banco no permitido" });
     }
 
-    // 👇 Seguridad extra: no crear órdenes sin verificación World ID
     if (!verified || !nullifier) {
       return res.status(400).json({
         ok: false,
@@ -242,47 +268,38 @@ app.post("/api/orders", (req, res) => {
       });
     }
 
-    const store = readStore();
-
     const ahora = new Date().toISOString();
-    const nueva = {
-  id: ++store.lastId,
-  banco,
-  titular,
-  numero,
-  montoWLD: Number(montoWLD),
-  montoCOP: Number(montoCOP),
+    const newId = await getNextOrderId();
 
-  // 🔒 Datos de verificación
-  verified: Boolean(verified),
-  nullifier: String(nullifier),
-
-  // 🔹 NUEVO: id interno de la transacción en World App (para auditoría)
-  wld_tx_id: wld_tx_id ? String(wld_tx_id) : null,
-
-  estado: "pendiente",
-  creada_en: ahora,
-  actualizada_en: ahora,
-};
-
-    store.orders.unshift(nueva);
-    writeStore(store);
+    const nueva = await Order.create({
+      id: newId,
+      banco,
+      titular,
+      numero,
+      montoWLD: Number(montoWLD),
+      montoCOP: Number(montoCOP),
+      verified: Boolean(verified),
+      nullifier: String(nullifier),
+      estado: "pendiente",
+      creada_en: ahora,
+      actualizada_en: ahora,
+      wld_tx_id: wld_tx_id || null,
+    });
 
     res.json({ ok: true, orden: nueva });
   } catch (err) {
+    console.error("❌ Error en POST /api/orders:", err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-
 // ==============================
-// 📦 OBTENER ORDEN POR ID (para refrescar estado en el front)
+// 📦 OBTENER ORDEN POR ID
 // ==============================
-app.get("/api/orders/:id", (req, res) => {
+app.get("/api/orders/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const store = readStore();
-    const orden = store.orders.find((o) => o.id === id);
+    const orden = await Order.findOne({ id }).lean();
 
     if (!orden) {
       return res.status(404).json({ ok: false, error: "Orden no encontrada" });
@@ -290,35 +307,29 @@ app.get("/api/orders/:id", (req, res) => {
 
     res.json(orden);
   } catch (err) {
+    console.error("❌ Error en GET /api/orders/:id:", err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// 🛠 ADMIN — Listar todas las órdenes (versión nueva, más segura)
-app.post("/api/orders-admin", (req, res) => {
+// 🛠 ADMIN — Listar órdenes (POST con pin en body)
+app.post("/api/orders-admin", async (req, res) => {
   try {
-    if (!isValidAdminPin(req)) {
-      return res
-        .status(403)
-        .json({ ok: false, error: "PIN inválido o no autorizado" });
+    const { pin } = req.body || {};
+    if (pin !== OPERATOR_PIN) {
+      return res.status(403).json({ ok: false, error: "PIN inválido" });
     }
 
-    const store = readStore();
-    return res.json(store.orders);
+    const orders = await Order.find().sort({ id: -1 }).lean();
+    return res.json(orders);
   } catch (err) {
-    console.error("Error en /api/orders-admin:", err);
+    console.error("Error en POST /api/orders-admin:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// ==============================
-// 🛠 ADMIN — Listar todas las órdenes
-// ==============================
-// Alias soportados:
-//   - /rs-admin?pin=XXXX         (viejo)
-//   - /api/orders-admin?pin=XXX  (nuevo, más "REST")
-// ==============================
-app.get(["/rs-admin", "/api/orders-admin"], (req, res) => {
+// 🛠 ADMIN — Listar órdenes (GET con pin en query o header)
+app.get(["/rs-admin", "/api/orders-admin"], async (req, res) => {
   try {
     if (!isValidAdminPin(req)) {
       return res
@@ -326,10 +337,10 @@ app.get(["/rs-admin", "/api/orders-admin"], (req, res) => {
         .json({ ok: false, error: "PIN inválido o no autorizado" });
     }
 
-    const store = readStore();
-    return res.json(store.orders);
+    const orders = await Order.find().sort({ id: -1 }).lean();
+    return res.json(orders);
   } catch (err) {
-    console.error("❌ Error en /api/orders-admin:", err);
+    console.error("❌ Error en GET /api/orders-admin:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
@@ -345,46 +356,54 @@ function isValidAdminPin(req) {
   const candidate = pinFromHeader || pinFromQuery || pinFromBody || "";
   return candidate === OPERATOR_PIN;
 }
+
 // ==============================
 // 🛠 ADMIN — Cambiar estado de una orden
 // ==============================
-app.put("/api/orders/:id/estado", (req, res) => {
+app.put("/api/orders/:id/estado", async (req, res) => {
   try {
     const estado = req.body.estado;
 
     if (!isValidAdminPin(req)) {
-      return res.status(403).json({ ok: false, error: "PIN inválido o no autorizado" });
+      return res
+        .status(403)
+        .json({ ok: false, error: "PIN inválido o no autorizado" });
     }
 
-    const validos = ["pendiente", "enviada", "recibida_wld", "pagada", "rechazada"];
+    const validos = [
+      "pendiente",
+      "enviada",
+      "recibida_wld",
+      "pagada",
+      "rechazada",
+    ];
     if (!validos.includes(estado)) {
       return res.status(400).json({ ok: false, error: "Estado inválido" });
     }
 
-    const store = readStore();
-    const idx = store.orders.findIndex((o) => o.id === Number(req.params.id));
+    const id = Number(req.params.id);
+    const orden = await Order.findOne({ id });
 
-    if (idx === -1) {
+    if (!orden) {
       return res.status(404).json({ ok: false, error: "Orden no encontrada" });
     }
 
-    const orden = store.orders[idx];
     orden.estado = estado;
     orden.actualizada_en = new Date().toISOString();
+
     if (!Array.isArray(orden.status_history)) {
       orden.status_history = [];
     }
     orden.status_history.push({ at: new Date().toISOString(), to: estado });
 
-    writeStore(store);
+    await orden.save();
+
     res.json({ ok: true, orden });
   } catch (err) {
-    console.error("❌ Error en /api/orders/:id/estado:", err);
+    console.error("❌ Error en PUT /api/orders/:id/estado:", err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
-
-
 
 // ==============================
 // START
