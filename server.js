@@ -1,5 +1,5 @@
 // ==============================
-// 🚀 ChangeWLD Backend — versión estable 2025 (MiniKit) + MongoDB
+// 🚀 ChangeWLD Backend — versión estable 2025 (MiniKit) + MongoDB + JWT admin
 // ==============================
 
 import dotenv from "dotenv";
@@ -8,6 +8,7 @@ import express from "express";
 import helmet from "helmet";
 import fetch from "node-fetch";
 import mongoose from "mongoose";
+import jwt from "jsonwebtoken";
 import { fileURLToPath } from "url";
 
 // 🔹 IMPORTANTE: añadimos verifyCloudProof desde minikit-js
@@ -30,10 +31,18 @@ const APP_ID = process.env.APP_ID;
 const MONGO_URI = process.env.MONGO_URI || "";
 const MONGO_DB_NAME = process.env.MONGO_DB_NAME || undefined;
 
+// 🔹 JWT admin
+const ADMIN_JWT_SECRET =
+  process.env.ADMIN_JWT_SECRET || "DEV_SECRET_CAMBIA_ESTO_EN_PRODUCCION";
+
 console.log("APP_ID:", APP_ID || "NO DEFINIDO");
 console.log("SPREAD:", SPREAD);
 console.log("Destino WLD:", WALLET_DESTINO);
 console.log("MONGO_URI configurado:", !!MONGO_URI);
+console.log(
+  "ADMIN_JWT_SECRET configurado:",
+  ADMIN_JWT_SECRET === "DEV_SECRET_CAMBIA_ESTO_EN_PRODUCCION" ? "DEFAULT" : "OK"
+);
 
 const app = express();
 app.use(helmet());
@@ -121,6 +130,41 @@ async function getNextOrderId() {
     { new: true, upsert: true }
   );
   return doc.value;
+}
+
+// ==============================
+// Helpers JWT admin
+// ==============================
+function createAdminToken() {
+  // payload mínimo: solo rol
+  return jwt.sign({ role: "admin" }, ADMIN_JWT_SECRET, { expiresIn: "24h" });
+}
+
+function isAdminAuthenticated(req) {
+  // 1) Preferimos JWT en Authorization: Bearer xxx
+  const authHeader = req.headers.authorization || "";
+  if (authHeader.startsWith("Bearer ")) {
+    const token = authHeader.slice(7);
+    try {
+      const payload = jwt.verify(token, ADMIN_JWT_SECRET);
+      if (payload && payload.role === "admin") {
+        return true;
+      }
+    } catch (err) {
+      console.warn("JWT admin inválido:", err.message);
+    }
+  }
+
+  // 2) Fallback de compatibilidad: PIN directo (NO recomendado, pero útil en emergencias)
+  const pinFromQuery = req.query.pin;
+  const pinFromBody = req.body?.pin;
+  const pinFromHeader = req.headers["x-admin-pin"];
+  const candidate = pinFromHeader || pinFromQuery || pinFromBody || "";
+  if (candidate && candidate === OPERATOR_PIN) {
+    return true;
+  }
+
+  return false;
 }
 
 // ==============================
@@ -241,6 +285,28 @@ app.get("/api/rate", async (_, res) => {
 });
 
 // ==============================
+// 🔑 LOGIN ADMIN (JWT)
+// ==============================
+app.post("/api/admin/login", async (req, res) => {
+  try {
+    const { pin } = req.body || {};
+    if (!pin || String(pin) !== String(OPERATOR_PIN)) {
+      return res.status(401).json({ ok: false, error: "PIN inválido" });
+    }
+
+    const token = createAdminToken();
+
+    return res.json({
+      ok: true,
+      token,
+    });
+  } catch (err) {
+    console.error("❌ Error en /api/admin/login:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==============================
 // 📦 CREAR ORDEN
 // ==============================
 app.post("/api/orders", async (req, res) => {
@@ -312,12 +378,14 @@ app.get("/api/orders/:id", async (req, res) => {
   }
 });
 
-// 🛠 ADMIN — Listar órdenes (POST con pin en body)
+// ==============================
+// 🛠 ADMIN — Listar órdenes (POST /api/orders-admin)
+// (Compatibilidad, pero ahora también exige autenticación)
+// ==============================
 app.post("/api/orders-admin", async (req, res) => {
   try {
-    const { pin } = req.body || {};
-    if (pin !== OPERATOR_PIN) {
-      return res.status(403).json({ ok: false, error: "PIN inválido" });
+    if (!isAdminAuthenticated(req)) {
+      return res.status(403).json({ ok: false, error: "No autorizado" });
     }
 
     const orders = await Order.find().sort({ id: -1 }).lean();
@@ -328,13 +396,15 @@ app.post("/api/orders-admin", async (req, res) => {
   }
 });
 
-// 🛠 ADMIN — Listar órdenes (GET con pin en query o header)
+// ==============================
+// 🛠 ADMIN — Listar órdenes (GET con JWT)
+// ==============================
 app.get(["/rs-admin", "/api/orders-admin"], async (req, res) => {
   try {
-    if (!isValidAdminPin(req)) {
+    if (!isAdminAuthenticated(req)) {
       return res
         .status(403)
-        .json({ ok: false, error: "PIN inválido o no autorizado" });
+        .json({ ok: false, error: "No autorizado (admin)" });
     }
 
     const orders = await Order.find().sort({ id: -1 }).lean();
@@ -346,28 +416,16 @@ app.get(["/rs-admin", "/api/orders-admin"], async (req, res) => {
 });
 
 // ==============================
-// 🛡 Helper: validación de PIN admin
-// ==============================
-function isValidAdminPin(req) {
-  const pinFromQuery = req.query.pin;
-  const pinFromBody = req.body?.pin;
-  const pinFromHeader = req.headers["x-admin-pin"];
-
-  const candidate = pinFromHeader || pinFromQuery || pinFromBody || "";
-  return candidate === OPERATOR_PIN;
-}
-
-// ==============================
 // 🛠 ADMIN — Cambiar estado de una orden
 // ==============================
 app.put("/api/orders/:id/estado", async (req, res) => {
   try {
     const estado = req.body.estado;
 
-    if (!isValidAdminPin(req)) {
+    if (!isAdminAuthenticated(req)) {
       return res
         .status(403)
-        .json({ ok: false, error: "PIN inválido o no autorizado" });
+        .json({ ok: false, error: "No autorizado (admin)" });
     }
 
     const validos = [
