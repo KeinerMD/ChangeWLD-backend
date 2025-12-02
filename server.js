@@ -23,6 +23,9 @@ const PORT = process.env.PORT || 4000;
 const SPREAD = Number(process.env.SPREAD ?? "0.25");
 const OPERATOR_PIN = process.env.OPERATOR_PIN || "4321";
 const WALLET_DESTINO = process.env.WALLET_DESTINO || "";
+const MAX_ORDERS_PER_NULLIFIER_PER_DAY = Number(
+  process.env.MAX_ORDERS_PER_NULLIFIER_PER_DAY || "3"
+);
 
 // 🔹 APP_ID de tu app de Worldcoin Developer Portal
 const APP_ID = process.env.APP_ID;
@@ -329,6 +332,40 @@ app.post("/api/orders", async (req, res) => {
       });
     }
 
+    // 🔹 Conversión y validación de monto mínimo
+    const montoWldNumber = Number(montoWLD || 0);
+    if (!Number.isFinite(montoWldNumber) || montoWldNumber < 1) {
+      return res.status(400).json({
+        ok: false,
+        error: "El monto mínimo por orden es de 1 WLD.",
+      });
+    }
+
+    // 🔒 LIMITES POR NULLIFIER (solo cantidad de órdenes por día)
+    const nullifierStr = String(nullifier);
+
+    // Inicio del día (00:00) en ISO
+    const hoy = new Date();
+    const inicioHoy = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+    const inicioHoyISO = inicioHoy.toISOString();
+
+    // Todas las órdenes de este usuario (nullifier) desde hoy 00:00
+    const ordersToday = await Order.find({
+      nullifier: nullifierStr,
+      creada_en: { $gte: inicioHoyISO },
+    }).lean();
+
+    const totalOrdersToday = ordersToday.length;
+
+    if (totalOrdersToday >= MAX_ORDERS_PER_NULLIFIER_PER_DAY) {
+      return res.status(429).json({
+        ok: false,
+        error:
+          "Has alcanzado el número máximo de órdenes permitidas por hoy. Intenta nuevamente mañana.",
+      });
+    }
+
+    // ✅ Si pasa las validaciones, creamos la orden
     const ahora = new Date().toISOString();
     const newId = await getNextOrderId();
 
@@ -337,10 +374,10 @@ app.post("/api/orders", async (req, res) => {
       banco,
       titular,
       numero,
-      montoWLD: Number(montoWLD),
+      montoWLD: montoWldNumber,
       montoCOP: Number(montoCOP),
       verified: Boolean(verified),
-      nullifier: String(nullifier),
+      nullifier: nullifierStr,
       estado: "pendiente",
       creada_en: ahora,
       actualizada_en: ahora,
@@ -353,6 +390,7 @@ app.post("/api/orders", async (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
 
 // ==============================
 // 📦 OBTENER ORDEN POR ID
