@@ -140,32 +140,27 @@ function createAdminToken() {
   return jwt.sign({ role: "admin" }, ADMIN_JWT_SECRET, { expiresIn: "24h" });
 }
 
+// ==============================
+// 🛡 Helper: validación de admin (solo JWT)
+// ==============================
 function isAdminAuthenticated(req) {
-  // 1) Preferimos JWT en Authorization: Bearer xxx
   const authHeader = req.headers.authorization || "";
-  if (authHeader.startsWith("Bearer ")) {
-    const token = authHeader.slice(7);
-    try {
-      const payload = jwt.verify(token, ADMIN_JWT_SECRET);
-      if (payload && payload.role === "admin") {
-        return true;
-      }
-    } catch (err) {
-      console.warn("JWT admin inválido:", err.message);
-    }
+  if (!authHeader.startsWith("Bearer ")) {
+    return false;
   }
 
-  // 2) Fallback de compatibilidad: PIN directo (NO recomendado, pero útil en emergencias)
-  const pinFromQuery = req.query.pin;
-  const pinFromBody = req.body?.pin;
-  const pinFromHeader = req.headers["x-admin-pin"];
-  const candidate = pinFromHeader || pinFromQuery || pinFromBody || "";
-  if (candidate && candidate === OPERATOR_PIN) {
-    return true;
-  }
+  const token = authHeader.slice(7);
 
-  return false;
+  try {
+    const payload = jwt.verify(token, ADMIN_JWT_SECRET);
+    // Solo aceptamos si el rol es "admin"
+    return Boolean(payload && payload.role === "admin");
+  } catch (err) {
+    console.warn("JWT admin inválido:", err.message);
+    return false;
+  }
 }
+
 
 // ==============================
 // ROOT
