@@ -10,6 +10,9 @@ import fetch from "node-fetch";
 import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
 import { fileURLToPath } from "url";
+import { ethers } from "ethers";
+import { User } from "./models/User.js";
+import { getWldBalance } from "./worldchain.js";
 
 // 🔹 IMPORTANTE: añadimos verifyCloudProof desde minikit-js
 import { verifyCloudProof } from "@worldcoin/minikit-js";
@@ -215,6 +218,103 @@ app.post("/api/verify-world-id", async (req, res) => {
     });
   }
 });
+
+// ==============================
+// VINCULAR WALLET
+// ==============================
+
+app.post("/api/wallet/link", async (req, res) => {
+  try {
+    const { nullifier, address, message, signature } = req.body || {};
+
+    if (!nullifier || !address || !message || !signature) {
+      return res.status(400).json({
+        ok: false,
+        error: "Faltan datos (nullifier, address, message, signature).",
+      });
+    }
+
+    // 1️⃣ Verificar firma: que la firma corresponda a esa address
+    let recovered;
+    try {
+      recovered = ethers.verifyMessage(message, signature);
+    } catch (err) {
+      console.error("Error verificando firma:", err.message);
+      return res.status(400).json({
+        ok: false,
+        error: "Firma inválida.",
+      });
+    }
+
+    if (recovered.toLowerCase() !== address.toLowerCase()) {
+      return res.status(400).json({
+        ok: false,
+        error: "La firma no corresponde a la dirección proporcionada.",
+      });
+    }
+
+    // 2️⃣ Guardar / actualizar usuario en Mongo
+    const nullifierStr = String(nullifier);
+
+    const user = await User.findOneAndUpdate(
+      { nullifier: nullifierStr },
+      { walletAddress: address },
+      { new: true, upsert: true }
+    );
+
+    // 3️⃣ (Opcional) leer saldo al vuelo
+    let balanceWLD = 0;
+    try {
+      balanceWLD = await getWldBalance(address);
+    } catch (err) {
+      console.warn("No se pudo leer saldo en World Chain:", err.message);
+    }
+
+    return res.json({
+      ok: true,
+      wallet: address,
+      balanceWLD,
+    });
+  } catch (err) {
+    console.error("❌ Error en /api/wallet/link:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==============================
+// ACRTUALIZAR BALANCE
+// ==============================
+
+app.get("/api/user/balance", async (req, res) => {
+  try {
+    const { nullifier } = req.query || {};
+    if (!nullifier) {
+      return res.status(400).json({ ok: false, error: "nullifier requerido" });
+    }
+
+    const user = await User.findOne({ nullifier: String(nullifier) }).lean();
+
+    if (!user || !user.walletAddress) {
+      return res.json({
+        ok: true,
+        wallet: null,
+        balanceWLD: 0,
+      });
+    }
+
+    const balance = await getWldBalance(user.walletAddress);
+
+    return res.json({
+      ok: true,
+      wallet: user.walletAddress,
+      balanceWLD: balance,
+    });
+  } catch (err) {
+    console.error("❌ Error en /api/user/balance:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 
 // ==============================
 // 💱 API RATE (Coingecko + fallback)
