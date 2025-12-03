@@ -9,13 +9,15 @@ import helmet from "helmet";
 import fetch from "node-fetch";
 import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import { fileURLToPath } from "url";
-import { ethers } from "ethers";
-import { User } from "./models/User.js";
-import { getWldBalance } from "./worldchain.js";
+import { ethers } from "ethers"; // ← NECESARIO para verificar firmas
 
-// 🔹 IMPORTANTE: añadimos verifyCloudProof desde minikit-js
-import { verifyCloudProof } from "@worldcoin/minikit-js";
+// desde minikit-js
+import { verifyCloudProof, verifySiweMessage } from "@worldcoin/minikit-js";
+
+// si usas worldchain.js:
+import { getWldBalance } from "./worldchain.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,6 +55,13 @@ console.log(
 const app = express();
 app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
+
+function hashNonce(nonce) {
+  return crypto
+    .createHmac("sha256", ADMIN_JWT_SECRET)
+    .update(String(nonce))
+    .digest("hex");
+}
 
 // ==============================
 // CORS (abierto para pruebas + header de admin)
@@ -126,8 +135,22 @@ const orderSchema = new mongoose.Schema({
   wld_tx_id: String,
 });
 
+// 👤 Usuario con World ID + wallet linkeada
+const userSchema = new mongoose.Schema({
+  nullifier: { type: String, unique: true },
+  walletAddress: { type: String },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+});
+
+userSchema.pre("save", function (next) {
+  this.updatedAt = new Date();
+  next();
+});
+
 const Counter = mongoose.model("Counter", counterSchema);
 const Order = mongoose.model("Order", orderSchema);
+const User = mongoose.model("User", userSchema);
 
 async function getNextOrderId() {
   const doc = await Counter.findOneAndUpdate(
@@ -167,11 +190,89 @@ function isAdminAuthenticated(req) {
   }
 }
 
-
 // ==============================
 // ROOT
 // ==============================
 app.get("/", (_, res) => res.send("🚀 ChangeWLD backend OK"));
+
+// ==============================
+// 🔐 SIWE: obtener nonce
+// ==============================
+app.get("/api/wallet-auth/nonce", (req, res) => {
+  try {
+    const nonce = crypto.randomBytes(16).toString("hex"); // 32 chars
+    const signedNonce = hashNonce(nonce);
+
+    return res.json({
+      ok: true,
+      nonce,
+      signedNonce,
+    });
+  } catch (err) {
+    console.error("❌ Error generando nonce SIWE:", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "No se pudo generar nonce" });
+  }
+});
+
+// ==============================
+// 🔐 SIWE: completar login de billetera
+// ==============================
+app.post("/api/wallet-auth/complete", async (req, res) => {
+  try {
+    const { nonce, signedNonce, finalPayloadJson } = req.body || {};
+
+    if (!nonce || !signedNonce || !finalPayloadJson) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "Faltan campos en el body" });
+    }
+
+    const expectedSignedNonce = hashNonce(nonce);
+    if (signedNonce !== expectedSignedNonce) {
+      console.log("❌ signedNonce inválido");
+      return res.status(401).json({ ok: false, error: "Nonce inválido" });
+    }
+
+    let finalPayload;
+    try {
+      finalPayload = JSON.parse(finalPayloadJson);
+    } catch (err) {
+      console.log("❌ finalPayloadJson no es JSON válido");
+      return res.status(400).json({ ok: false, error: "Payload inválido" });
+    }
+
+    const result = await verifySiweMessage(finalPayload, nonce);
+
+    if (!result.isValid || !result.siweMessageData?.address) {
+      console.log("❌ SIWE no válido");
+      return res
+        .status(401)
+        .json({ ok: false, error: "SIWE inválido o sin address" });
+    }
+
+    const walletAddress = result.siweMessageData.address;
+
+    // Opcional: crear un token de sesión para esa wallet
+    const walletToken = jwt.sign(
+      { role: "wallet", walletAddress },
+      ADMIN_JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    return res.json({
+      ok: true,
+      walletAddress,
+      walletToken,
+    });
+  } catch (err) {
+    console.error("❌ Error en /api/wallet-auth/complete:", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: err?.message || "Error interno" });
+  }
+});
 
 // ==============================
 // 🌐 WORLD ID API (MiniKit verifyCloudProof)
@@ -220,9 +321,8 @@ app.post("/api/verify-world-id", async (req, res) => {
 });
 
 // ==============================
-// VINCULAR WALLET
+// 🔗 VINCULAR WALLET A NULLIFIER
 // ==============================
-
 app.post("/api/wallet/link", async (req, res) => {
   try {
     const { nullifier, address, message, signature } = req.body || {};
@@ -274,6 +374,7 @@ app.post("/api/wallet/link", async (req, res) => {
       ok: true,
       wallet: address,
       balanceWLD,
+      userId: user._id,
     });
   } catch (err) {
     console.error("❌ Error en /api/wallet/link:", err);
@@ -282,9 +383,8 @@ app.post("/api/wallet/link", async (req, res) => {
 });
 
 // ==============================
-// ACRTUALIZAR BALANCE
+// 🔄 ACTUALIZAR BALANCE POR NULLIFIER
 // ==============================
-
 app.get("/api/user/balance", async (req, res) => {
   try {
     const { nullifier } = req.query || {};
@@ -315,6 +415,31 @@ app.get("/api/user/balance", async (req, res) => {
   }
 });
 
+// ==============================
+// 💰 Obtener balance WLD en World Chain (por address directa)
+// ==============================
+app.get("/api/wallet-balance", async (req, res) => {
+  try {
+    const address = String(req.query.address || "").trim();
+
+    if (!address || !address.startsWith("0x") || address.length < 20) {
+      return res.status(400).json({ ok: false, error: "Address inválida" });
+    }
+
+    const balance = await getWldBalance(address); // número en WLD
+
+    return res.json({
+      ok: true,
+      balanceWLD: balance,
+    });
+  } catch (err) {
+    console.error("❌ Error en /api/wallet-balance:", err);
+    return res.status(500).json({
+      ok: false,
+      error: err?.message || "No se pudo leer el balance",
+    });
+  }
+});
 
 // ==============================
 // 💱 API RATE (Coingecko + fallback)
@@ -491,7 +616,6 @@ app.post("/api/orders", async (req, res) => {
   }
 });
 
-
 // ==============================
 // 📦 OBTENER ORDEN POR ID
 // ==============================
@@ -513,7 +637,6 @@ app.get("/api/orders/:id", async (req, res) => {
 
 // ==============================
 // 🛠 ADMIN — Listar órdenes (POST /api/orders-admin)
-// (Compatibilidad, pero ahora también exige autenticación)
 // ==============================
 app.post("/api/orders-admin", async (req, res) => {
   try {
