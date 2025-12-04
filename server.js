@@ -636,6 +636,42 @@ app.get("/api/orders/:id", async (req, res) => {
 });
 
 // ==============================
+// 📦 OBTENER ÓRDENES POR WALLET (HISTORIAL)
+// ==============================
+app.get("/api/orders-by-wallet", async (req, res) => {
+  try {
+    const { wallet } = req.query || {};
+
+    if (!wallet) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "wallet requerida en la query" });
+    }
+
+    // Usamos el campo "nullifier" para guardar la identidad del usuario.
+    // En tu flujo actual, estás enviando la wallet como nullifier desde el frontend.
+    const walletStr = String(wallet);
+
+    const orders = await Order.find({
+      nullifier: walletStr,
+    })
+      .sort({ id: -1 })
+      .lean();
+
+    return res.json({
+      ok: true,
+      wallet: walletStr,
+      count: orders.length,
+      orders,
+    });
+  } catch (err) {
+    console.error("❌ Error en GET /api/orders-by-wallet:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+
+// ==============================
 // 📦 OBTENER ÓRDENES POR NULLIFIER (historial del usuario)
 // ==============================
 app.get("/api/orders-by-nullifier", async (req, res) => {
