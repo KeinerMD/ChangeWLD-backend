@@ -636,6 +636,31 @@ app.get("/api/orders/:id", async (req, res) => {
 });
 
 // ==============================
+// 📦 LISTAR ÓRDENES DE UN USUARIO (por nullifier)
+// ==============================
+app.get("/api/orders/by-user", async (req, res) => {
+  try {
+    const { nullifier } = req.query || {};
+
+    if (!nullifier) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "nullifier requerido" });
+    }
+
+    const orders = await Order.find({ nullifier: String(nullifier) })
+      .sort({ id: -1 })
+      .lean();
+
+    return res.json({ ok: true, orders });
+  } catch (err) {
+    console.error("❌ Error en GET /api/orders/by-user:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+
+// ==============================
 // 🛠 ADMIN — Listar órdenes (POST /api/orders-admin)
 // ==============================
 app.post("/api/orders-admin", async (req, res) => {
