@@ -6,7 +6,6 @@ import dotenv from "dotenv";
 import path from "path";
 import express from "express";
 import helmet from "helmet";
-import fetch from "node-fetch";
 import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
@@ -134,8 +133,10 @@ const orderSchema = new mongoose.Schema({
     },
   ],
   wld_tx_id: String,
-  // 🔹 Nuevo: fecha “contable” para inventario diario (YYYY-MM-DD)
+  // 🔹 Fecha “contable” para inventario diario (YYYY-MM-DD)
   inventario_fecha: String,
+  // 🔹 Ganancia de la casa en COP para esta orden
+  ganancia_cop: Number,
 });
 
 // 👤 Usuario con World ID + wallet linkeada
@@ -193,6 +194,10 @@ function isAdminAuthenticated(req) {
   }
 }
 
+// ==============================
+// 🕒 Horario Colombia + regla de inventario
+// ==============================
+
 // 🇨🇴 Colombia está en UTC-5 sin cambios de horario
 const COLOMBIA_UTC_OFFSET_MIN = -5 * 60;
 
@@ -203,22 +208,26 @@ function getColombiaNow() {
 }
 
 // Calcula la fecha de inventario (YYYY-MM-DD) según horario laboral
+// Lun–Jue: después de 5 pm → día siguiente
+// Viernes: después de 5 pm → sábado
+// Sábado: después de 3 pm → lunes
+// Domingo: siempre lunes
 function calcularInventarioFecha(nowColombia) {
   const d = new Date(nowColombia); // copia
-  const day = d.getDay();   // 0=Dom,1=Lun,...,6=Sab
+  const day = d.getDay(); // 0=Dom,1=Lun,...,6=Sab
   const hour = d.getHours();
   const minute = d.getMinutes();
 
   const toISODate = (date) => date.toISOString().slice(0, 10); // YYYY-MM-DD
 
-  // ⛔ Domingo → siempre se pasa al lunes
+  // Domingo → siempre se pasa al lunes
   if (day === 0) {
     const monday = new Date(d);
     monday.setDate(monday.getDate() + 1);
     return toISODate(monday);
   }
 
-  // 🗓️ Lunes a jueves (1–4)
+  // Lunes a jueves (1–4)
   if (day >= 1 && day <= 4) {
     // Después de las 5:00 pm → siguiente día
     if (hour > 17 || (hour === 17 && minute >= 0)) {
@@ -230,7 +239,7 @@ function calcularInventarioFecha(nowColombia) {
     return toISODate(d);
   }
 
-  // 🗓️ Viernes (5)
+  // Viernes (5)
   if (day === 5) {
     // Después de las 5:00 pm → se cuenta para el sábado
     if (hour > 17 || (hour === 17 && minute >= 0)) {
@@ -241,7 +250,7 @@ function calcularInventarioFecha(nowColombia) {
     return toISODate(d);
   }
 
-  // 🗓️ Sábado (6)
+  // Sábado (6)
   if (day === 6) {
     // Después de las 3:00 pm → se cuenta para el lunes
     if (hour > 15 || (hour === 15 && minute >= 0)) {
@@ -256,7 +265,6 @@ function calcularInventarioFecha(nowColombia) {
   // Fallback
   return toISODate(d);
 }
-
 
 // ==============================
 // ROOT
@@ -585,23 +593,20 @@ app.post("/api/orders", async (req, res) => {
       });
     }
 
-    // 🔒 LIMITES POR NULLIFIER (solo cantidad de órdenes por día)
     const nullifierStr = String(nullifier);
 
-    // Inicio del día (00:00) en ISO
-    const hoy = new Date();
-    const inicioHoy = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
-    const inicioHoyISO = inicioHoy.toISOString();
+    // 🔒 LIMITES POR NULLIFIER (solo cantidad de órdenes por día natural en Colombia)
+    const ahoraColombia = getColombiaNow();
+    const inicioHoyCol = new Date(ahoraColombia);
+    inicioHoyCol.setHours(0, 0, 0, 0);
+    const inicioHoyISO = inicioHoyCol.toISOString();
 
-    // Todas las órdenes de este usuario (nullifier) desde hoy 00:00
     const ordersToday = await Order.find({
       nullifier: nullifierStr,
       creada_en: { $gte: inicioHoyISO },
     }).lean();
 
-    const totalOrdersToday = ordersToday.length;
-
-    if (totalOrdersToday >= MAX_ORDERS_PER_NULLIFIER_PER_DAY) {
+    if (ordersToday.length >= MAX_ORDERS_PER_NULLIFIER_PER_DAY) {
       return res.status(429).json({
         ok: false,
         error:
@@ -609,11 +614,19 @@ app.post("/api/orders", async (req, res) => {
       });
     }
 
-      // ✅ Si pasa las validaciones, creamos la orden
-      const ahoraColombia = getColombiaNow();
-      const ahoraISO = ahoraColombia.toISOString();
-      const inventarioFecha = calcularInventarioFecha(ahoraColombia);
-      const newId = await getNextOrderId();
+    // ✅ Si pasa las validaciones, calculamos tiempos e inventario
+    const ahoraISO = ahoraColombia.toISOString();
+    const inventarioFecha = calcularInventarioFecha(ahoraColombia);
+
+    // Ganancia = lo que cobras de spread (usando SPREAD del backend)
+    const gananciaCop = (() => {
+      const mCop = Number(montoCOP);
+      const s = SPREAD; // ej: 0.25
+      if (!Number.isFinite(mCop) || s <= 0 || s >= 1) return 0;
+      return Number(((mCop * s) / (1 - s)).toFixed(2));
+    })();
+
+    const newId = await getNextOrderId();
 
     const nueva = await Order.create({
       id: newId,
@@ -625,12 +638,17 @@ app.post("/api/orders", async (req, res) => {
       verified: Boolean(verified),
       nullifier: nullifierStr,
       estado: "pendiente",
-      creada_en: ahora,
-      actualizada_en: ahora,
+      creada_en: ahoraISO,
+      actualizada_en: ahoraISO,
       wld_tx_id: wld_tx_id || null,
-
-        // 🔹 nueva propiedad
-  inventario_fecha: inventarioFecha,
+      inventario_fecha: inventarioFecha,
+      ganancia_cop: gananciaCop,
+      status_history: [
+        {
+          at: ahoraISO,
+          to: "pendiente",
+        },
+      ],
     });
 
     res.json({ ok: true, orden: nueva });
@@ -640,15 +658,17 @@ app.post("/api/orders", async (req, res) => {
   }
 });
 
-
+// ==============================
 // 📦 OBTENER ÓRDENES POR FECHA DE INVENTARIO
+// ==============================
 app.get("/api/orders-por-dia", async (req, res) => {
   try {
     const { fecha } = req.query || {}; // esperado "YYYY-MM-DD"
     if (!fecha) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "Parámetro 'fecha' es requerido (YYYY-MM-DD)" });
+      return res.status(400).json({
+        ok: false,
+        error: "Parámetro 'fecha' es requerido (YYYY-MM-DD)",
+      });
     }
 
     const orders = await Order.find({ inventario_fecha: fecha })
@@ -666,6 +686,7 @@ app.get("/api/orders-por-dia", async (req, res) => {
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
+
 // ==============================
 // 📦 OBTENER ORDEN POR ID
 // ==============================
@@ -719,7 +740,6 @@ app.get("/api/orders-by-wallet", async (req, res) => {
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
-
 
 // ==============================
 // 📦 OBTENER ÓRDENES POR NULLIFIER (historial del usuario)
