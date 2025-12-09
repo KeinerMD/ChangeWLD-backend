@@ -134,6 +134,8 @@ const orderSchema = new mongoose.Schema({
     },
   ],
   wld_tx_id: String,
+  // 🔹 Nuevo: fecha “contable” para inventario diario (YYYY-MM-DD)
+  inventario_fecha: String,
 });
 
 // 👤 Usuario con World ID + wallet linkeada
@@ -190,6 +192,71 @@ function isAdminAuthenticated(req) {
     return false;
   }
 }
+
+// 🇨🇴 Colombia está en UTC-5 sin cambios de horario
+const COLOMBIA_UTC_OFFSET_MIN = -5 * 60;
+
+function getColombiaNow() {
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+  return new Date(utcMs + COLOMBIA_UTC_OFFSET_MIN * 60000);
+}
+
+// Calcula la fecha de inventario (YYYY-MM-DD) según horario laboral
+function calcularInventarioFecha(nowColombia) {
+  const d = new Date(nowColombia); // copia
+  const day = d.getDay();   // 0=Dom,1=Lun,...,6=Sab
+  const hour = d.getHours();
+  const minute = d.getMinutes();
+
+  const toISODate = (date) => date.toISOString().slice(0, 10); // YYYY-MM-DD
+
+  // ⛔ Domingo → siempre se pasa al lunes
+  if (day === 0) {
+    const monday = new Date(d);
+    monday.setDate(monday.getDate() + 1);
+    return toISODate(monday);
+  }
+
+  // 🗓️ Lunes a jueves (1–4)
+  if (day >= 1 && day <= 4) {
+    // Después de las 5:00 pm → siguiente día
+    if (hour > 17 || (hour === 17 && minute >= 0)) {
+      const next = new Date(d);
+      next.setDate(next.getDate() + 1);
+      return toISODate(next);
+    }
+    // Dentro del horario → mismo día
+    return toISODate(d);
+  }
+
+  // 🗓️ Viernes (5)
+  if (day === 5) {
+    // Después de las 5:00 pm → se cuenta para el sábado
+    if (hour > 17 || (hour === 17 && minute >= 0)) {
+      const saturday = new Date(d);
+      saturday.setDate(saturday.getDate() + 1); // viernes +1 = sábado
+      return toISODate(saturday);
+    }
+    return toISODate(d);
+  }
+
+  // 🗓️ Sábado (6)
+  if (day === 6) {
+    // Después de las 3:00 pm → se cuenta para el lunes
+    if (hour > 15 || (hour === 15 && minute >= 0)) {
+      const monday = new Date(d);
+      monday.setDate(monday.getDate() + 2); // sábado +2 = lunes
+      return toISODate(monday);
+    }
+    // Antes / hasta las 3 pm → se cuenta para el sábado
+    return toISODate(d);
+  }
+
+  // Fallback
+  return toISODate(d);
+}
+
 
 // ==============================
 // ROOT
@@ -542,9 +609,11 @@ app.post("/api/orders", async (req, res) => {
       });
     }
 
-    // ✅ Si pasa las validaciones, creamos la orden
-    const ahora = new Date().toISOString();
-    const newId = await getNextOrderId();
+      // ✅ Si pasa las validaciones, creamos la orden
+      const ahoraColombia = getColombiaNow();
+      const ahoraISO = ahoraColombia.toISOString();
+      const inventarioFecha = calcularInventarioFecha(ahoraColombia);
+      const newId = await getNextOrderId();
 
     const nueva = await Order.create({
       id: newId,
@@ -559,6 +628,9 @@ app.post("/api/orders", async (req, res) => {
       creada_en: ahora,
       actualizada_en: ahora,
       wld_tx_id: wld_tx_id || null,
+
+        // 🔹 nueva propiedad
+  inventario_fecha: inventarioFecha,
     });
 
     res.json({ ok: true, orden: nueva });
@@ -568,6 +640,32 @@ app.post("/api/orders", async (req, res) => {
   }
 });
 
+
+// 📦 OBTENER ÓRDENES POR FECHA DE INVENTARIO
+app.get("/api/orders-por-dia", async (req, res) => {
+  try {
+    const { fecha } = req.query || {}; // esperado "YYYY-MM-DD"
+    if (!fecha) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "Parámetro 'fecha' es requerido (YYYY-MM-DD)" });
+    }
+
+    const orders = await Order.find({ inventario_fecha: fecha })
+      .sort({ id: 1 })
+      .lean();
+
+    return res.json({
+      ok: true,
+      fecha,
+      count: orders.length,
+      orders,
+    });
+  } catch (err) {
+    console.error("❌ Error en GET /api/orders-por-dia:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
 // ==============================
 // 📦 OBTENER ORDEN POR ID
 // ==============================
