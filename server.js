@@ -12,6 +12,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import { ethers } from "ethers"; // ← NECESARIO para verificar firmas
+import { getCachedRate, startRateRefresher } from "./services/rateService.js";
 
 // desde minikit-js
 import { verifyCloudProof, verifySiweMessage } from "@worldcoin/minikit-js";
@@ -442,68 +443,19 @@ app.get("/api/wallet-balance", async (req, res) => {
 });
 
 // ==============================
-// 💱 API RATE (Coingecko + fallback)
+// 💱 API RATE (World App Get Prices)
 // ==============================
-let cachedRate = null;
-let lastFetchTime = 0;
-
 app.get("/api/rate", async (_, res) => {
   try {
-    const now = Date.now();
-    if (cachedRate && now - lastFetchTime < 60_000) {
-      return res.json({ ...cachedRate, cached: true });
-    }
-
-    let wldUsd = 0.699;
-    let usdCop = 3719;
-    let wldCopBruto = wldUsd * usdCop;
-
-    let wldFromFallback = true;
-    let usdCopFromFallback = true;
-
-    try {
-      const r = await fetch(
-        "https://api.coingecko.com/api/v3/simple/price?ids=worldcoin-wld&vs_currencies=usd,cop"
-      );
-      const j = await r.json();
-
-      const data = j["worldcoin-wld"];
-      if (data && typeof data.usd === "number" && typeof data.cop === "number") {
-        wldUsd = data.usd;
-        wldCopBruto = data.cop;
-        usdCop = wldCopBruto / wldUsd;
-
-        wldFromFallback = false;
-        usdCopFromFallback = false;
-
-        console.log("✅ Coingecko WLD_USD:", wldUsd, "WLD_COP:", wldCopBruto);
-      } else {
-        console.log("⚠️ Respuesta inesperada de Coingecko:", j);
-      }
-    } catch (err) {
-      console.log("⚠️ Error llamando a Coingecko:", err.message);
-    }
-
-    const usuario = wldCopBruto * (1 - SPREAD);
-
-    cachedRate = {
-      ok: true,
-      wld_usd: wldUsd,
-      usd_cop: usdCop,
-      wld_cop_bruto: wldCopBruto,
-      wld_cop_usuario: usuario,
-      spread_percent: SPREAD * 100,
-      wld_from_fallback: wldFromFallback,
-      usd_cop_from_fallback: usdCopFromFallback,
-    };
-
-    lastFetchTime = now;
-    return res.json(cachedRate);
+    const rate = await getCachedRate();
+    return res.json({ ok: true, ...rate });
   } catch (err) {
     console.error("❌ Fatal en /api/rate:", err);
-    return res
-      .status(500)
-      .json({ ok: false, error: "Rate fatal", detail: err.message });
+    return res.status(500).json({
+      ok: false,
+      error: "Rate fatal",
+      detail: err.message,
+    });
   }
 });
 
@@ -783,6 +735,9 @@ app.put("/api/orders/:id/estado", async (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+// Inicia el refresco periódico de la tasa WLD/COP desde World App
+startRateRefresher();
 
 // ==============================
 // START
