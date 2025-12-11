@@ -19,6 +19,9 @@ import { verifyCloudProof, verifySiweMessage } from "@worldcoin/minikit-js";
 // si usas worldchain.js:
 import { getWldBalance } from "./worldchain.js";
 
+// ABI del token WLD (ERC20)
+import { WLD_ABI } from "./wldAbi.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -42,6 +45,33 @@ const MONGO_DB_NAME = process.env.MONGO_DB_NAME || undefined;
 // 🔹 JWT admin
 const ADMIN_JWT_SECRET =
   process.env.ADMIN_JWT_SECRET || "DEV_SECRET_CAMBIA_ESTO_EN_PRODUCCION";
+
+// 🔹 World Chain (para autoCheckWldReceipts)
+const WORLDCHAIN_RPC_URL =
+  process.env.WORLDCHAIN_RPC_URL || process.env.WORLDCHAIN_RPC || "";
+const WLD_TOKEN_ADDRESS =
+  process.env.WLD_TOKEN_ADDRESS ||
+  process.env.VITE_WLD_TOKEN_ADDRESS ||
+  "";
+
+if (!WORLDCHAIN_RPC_URL) {
+  console.warn("⚠️ WORLDCHAIN_RPC_URL no configurado en backend.");
+}
+if (!WLD_TOKEN_ADDRESS) {
+  console.warn("⚠️ WLD_TOKEN_ADDRESS no configurado en backend.");
+}
+if (!WALLET_DESTINO) {
+  console.warn("⚠️ WALLET_DESTINO no configurado en backend.");
+}
+
+const worldchainProvider = WORLDCHAIN_RPC_URL
+  ? new ethers.JsonRpcProvider(WORLDCHAIN_RPC_URL)
+  : null;
+
+const wldInterface =
+  WLD_TOKEN_ADDRESS && WLD_ABI && WLD_ABI.length
+    ? new ethers.Interface(WLD_ABI)
+    : null;
 
 console.log("APP_ID:", APP_ID || "NO DEFINIDO");
 console.log("SPREAD:", SPREAD);
@@ -264,6 +294,143 @@ function calcularInventarioFecha(nowColombia) {
 
   // Fallback
   return toISODate(d);
+}
+
+// ==============================
+// 🔧 Helper para comparar montos en WLD con 18 decimales
+// ==============================
+function toTokenUnitsBigInt(amountStr, decimals = 18) {
+  const [intPartRaw, decPartRaw] = String(amountStr).split(".");
+  const intPart = intPartRaw || "0";
+  const decPart = (decPartRaw || "").padEnd(decimals, "0").slice(0, decimals);
+
+  const base = 10n ** BigInt(decimals);
+  return BigInt(intPart) * base + BigInt(decPart || "0");
+}
+
+// ==============================
+// 🔁 autoCheckWldReceipts: marcar órdenes como 'recibida_wld'
+// cuando se detecta en World Chain la transferencia correcta
+// ==============================
+async function checkPendingWldReceipts() {
+  if (!worldchainProvider || !WLD_TOKEN_ADDRESS || !WALLET_DESTINO || !wldInterface) {
+    return;
+  }
+
+  // Órdenes que todavía no se han marcado como recibidas
+  const pendientes = await Order.find({
+    estado: { $in: ["pendiente", "enviada"] },
+    wld_tx_id: { $ne: null },
+  })
+    .sort({ id: 1 })
+    .lean();
+
+  if (!pendientes.length) return;
+
+  console.log(`🔍 Revisando ${pendientes.length} órdenes pendientes para WLD recibidos...`);
+
+  const expectedToken = WLD_TOKEN_ADDRESS.toLowerCase();
+  const expectedDestino = WALLET_DESTINO.toLowerCase();
+
+  for (const ord of pendientes) {
+    try {
+      const txHash = ord.wld_tx_id;
+      if (!txHash) continue;
+
+      const receipt = await worldchainProvider.getTransactionReceipt(txHash);
+
+      // Si aún no hay receipt o falló, continuamos esperando
+      if (!receipt || receipt.status !== 1) {
+        continue;
+      }
+
+      const logs = receipt.logs || [];
+      const expectedFrom = (ord.nullifier || "").toLowerCase();
+      const expectedValue = toTokenUnitsBigInt(String(ord.montoWLD || 0), 18);
+
+      let match = false;
+
+      for (const log of logs) {
+        if (!log.address || log.address.toLowerCase() !== expectedToken) {
+          continue;
+        }
+
+        let parsed;
+        try {
+          parsed = wldInterface.parseLog(log);
+        } catch {
+          continue;
+        }
+
+        if (parsed.name !== "Transfer") continue;
+
+        const from =
+          (parsed.args.from || parsed.args[0] || "").toLowerCase();
+        const to = (parsed.args.to || parsed.args[1] || "").toLowerCase();
+        const valueBig = BigInt(
+          parsed.args.value?.toString() || parsed.args[2]?.toString() || "0"
+        );
+
+        // Debe ser un transfer hacia WALLET_DESTINO, desde el usuario (opcional) y por el monto exacto
+        if (to === expectedDestino && valueBig === expectedValue) {
+          if (!expectedFrom || from === expectedFrom) {
+            match = true;
+            break;
+          }
+        }
+      }
+
+      if (!match) {
+        continue;
+      }
+
+      const nowIso = new Date().toISOString();
+
+      await Order.updateOne(
+        { id: ord.id },
+        {
+          $set: {
+            estado: "recibida_wld",
+            actualizada_en: nowIso,
+          },
+          $push: {
+            status_history: { at: nowIso, to: "recibida_wld" },
+          },
+        }
+      );
+
+      console.log(
+        `🟣 Orden #${ord.id} marcada automáticamente como 'recibida_wld' (tx ${txHash})`
+      );
+    } catch (err) {
+      console.error(`❌ Error autoCheck en orden #${ord.id}:`, err.message);
+    }
+  }
+}
+
+function startAutoCheckWldReceipts() {
+  if (!worldchainProvider || !WLD_TOKEN_ADDRESS || !WALLET_DESTINO || !wldInterface) {
+    console.warn(
+      "⚠️ autoCheckWldReceipts desactivado: falta RPC, token, destino o ABI."
+    );
+    return;
+  }
+
+  console.log(
+    "🟣 autoCheckWldReceipts activo: revisando WLD recibidos cada 30 segundos."
+  );
+
+  // Primera pasada inmediata
+  checkPendingWldReceipts().catch((err) =>
+    console.error("❌ Error inicial en autoCheckWldReceipts:", err)
+  );
+
+  // Luego cada 30s
+  setInterval(() => {
+    checkPendingWldReceipts().catch((err) =>
+      console.error("❌ Error en autoCheckWldReceipts:", err)
+    );
+  }, 30_000);
 }
 
 // ==============================
@@ -856,6 +1023,9 @@ app.put("/api/orders/:id/estado", async (req, res) => {
 
 // Inicia el refresco periódico de la tasa WLD/COP desde World App
 startRateRefresher();
+
+// Inicia el auto-check de recibos WLD
+startAutoCheckWldReceipts();
 
 // ==============================
 // START
