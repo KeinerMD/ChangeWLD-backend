@@ -337,6 +337,12 @@ async function checkPendingWldReceipts() {
       const txHash = ord.wld_tx_id;
       if (!txHash) continue;
 
+          // 🔎 Validación rápida de formato de hash
+    if (typeof txHash !== "string" || !txHash.startsWith("0x") || txHash.length !== 66) {
+      console.warn(`⚠️ wld_tx_id con formato raro en orden #${ord.id}:`, txHash);
+      continue;
+    }
+
       const receipt = await worldchainProvider.getTransactionReceipt(txHash);
 
       // Si aún no hay receipt o falló, continuamos esperando
